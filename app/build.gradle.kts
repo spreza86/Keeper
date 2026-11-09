@@ -16,6 +16,17 @@ android {
         versionName = "0.6"
     }
 
+    // Fixed signing key, kept in the repo: every build from any session signs the same way,
+    // so a new version always installs over the old one. Personal app, never published.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("keeper-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

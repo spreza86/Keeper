@@ -13,4 +13,6 @@ export ANDROID_HOME=/opt/android-sdk
 echo "sdk.dir=/opt/android-sdk" > local.properties
 ./gradlew lintDebug assembleDebug --console=plain
 ```
-APK: app/build/outputs/apk/debug/app-debug.apk. settings.gradle.kts only uses google() and the repo1.maven.org mirror (mavenCentral/gradlePluginPortal get 429/403 through the proxy). No emulator (no KVM): Saul tests on his phone.
+APK: app/build/outputs/apk/debug/app-debug.apk. Signed with app/keeper-debug.keystore (in the repo, since 0.6). Never change or regenerate it: a different key makes Android refuse to update ("App not installed").
+
+A fresh session has no Android SDK: get commandlinetools from dl.google.com into /opt/android-sdk/cmdline-tools/latest, accept licenses, install platforms;android-35, build-tools;35.0.0, platform-tools. repo1.maven.org returns 429 under parallel downloads: use --max-workers=1 and retry. settings.gradle.kts only uses google() and the repo1.maven.org mirror (mavenCentral/gradlePluginPortal get 429/403 through the proxy). No emulator (no KVM): Saul tests on his phone.
