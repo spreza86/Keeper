@@ -1,6 +1,7 @@
 package com.preza.keeper.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -143,7 +144,25 @@ fun PhotoViewer(v: ViewerState, state: UiState, vm: AppViewModel) {
             }
             val cur = v.decisions[pager.currentPage.coerceIn(0, v.decisions.size - 1)]
             val kept = vm.isKept(cur, state.overrides)
-            TopBar("${pager.currentPage + 1} of ${v.decisions.size}", reasonFor(cur, state.overrides[cur.photo.id])) { vm.closeViewer() }
+            var showWhy by remember { mutableStateOf(false) }
+            val count = "${pager.currentPage + 1} of ${v.decisions.size}"
+            Column(Modifier.fillMaxWidth()) {
+                TopBar(
+                    if (v.label != null) "${v.label} · $count" else count,
+                    reasonFor(cur, state.overrides[cur.photo.id]),
+                    why = if (cur.why.isNotBlank()) ({ showWhy = !showWhy }) else null,
+                    whyOpen = showWhy
+                ) { vm.closeViewer() }
+                if (showWhy && cur.why.isNotBlank()) {
+                    Column(
+                        Modifier.fillMaxWidth().background(Color(0xE6000000)).padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Why \"${cur.reason}\"", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        cur.why.lines().forEach { Text(it, color = Color(0xFFE0E0E0), fontSize = 12.sp, lineHeight = 16.sp) }
+                    }
+                }
+            }
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -162,7 +181,7 @@ private fun reasonFor(d: Decision, override: Boolean?): String = when {
 }
 
 @Composable
-private fun TopBar(title: String, chip: String?, onClose: () -> Unit) {
+private fun TopBar(title: String, chip: String?, why: (() -> Unit)? = null, whyOpen: Boolean = false, onClose: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(Color(0x99000000)).statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -173,6 +192,12 @@ private fun TopBar(title: String, chip: String?, onClose: () -> Unit) {
             chip,
             modifier = Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).padding(horizontal = 10.dp, vertical = 4.dp),
             color = Color.White, fontSize = 12.sp
+        )
+        if (why != null) Text(
+            if (whyOpen) "Hide" else "Why?",
+            modifier = Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(Color(0xFFB1D18A))
+                .clickable(onClick = why).padding(horizontal = 10.dp, vertical = 4.dp),
+            color = Color(0xFF1F3701), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
         )
     }
 }

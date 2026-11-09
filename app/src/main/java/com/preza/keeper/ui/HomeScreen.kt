@@ -160,11 +160,13 @@ fun HomeScreen(state: UiState, vm: AppViewModel) {
 
 @Composable
 private fun Hero(state: UiState, vm: AppViewModel, lib: Library, bytes: Long, count: Int) {
-    // Photo: the best keeper of the newest abandoned set, else of the newest outing.
-    val source = lib.abandoned.maxByOrNull { it.start } ?: lib.sessions.maxByOrNull { it.start }
-    val photo = source?.decisions?.filter { it.verdict != Verdict.DELETE }?.maxByOrNull { it.photo.f.sharp }?.photo
-        ?: source?.photos?.firstOrNull()
-    Box(Modifier.fillMaxWidth().height(400.dp).clip(RoundedCornerShape(28.dp)).background(Color(0xFF2A261F))) {
+    // Photo: a random one from the whole library, new on each app open. Tapping it opens its outing.
+    val hero = state.hero
+    val photo = hero?.decision?.photo
+    Box(
+        Modifier.fillMaxWidth().height(400.dp).clip(RoundedCornerShape(28.dp)).background(Color(0xFF2A261F))
+            .then(if (hero != null) Modifier.clickable { vm.open(Screen.SetDetail(hero.session.key)) } else Modifier)
+    ) {
         if (photo != null) LargePhoto(photo, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         Box(
             Modifier.fillMaxSize().background(
@@ -174,7 +176,14 @@ private fun Hero(state: UiState, vm: AppViewModel, lib: Library, bytes: Long, co
             )
         )
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Keeper", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("Keeper", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                if (hero != null) Text(
+                    listOfNotNull(Fmt.day(hero.session.start, hero.session.offset), hero.session.place?.let { it.area ?: it.city })
+                        .joinToString(" · ") + " · tap to open",
+                    color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp
+                )
+            }
             IconButton(onClick = { vm.open(Screen.Settings) }) {
                 Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Color.White)
             }
@@ -197,7 +206,7 @@ private fun Hero(state: UiState, vm: AppViewModel, lib: Library, bytes: Long, co
             }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 HeroButton("Show me", filled = true) { vm.tab(if (lib.abandoned.isNotEmpty() || lib.bursts.isEmpty()) Screen.Sets else Screen.Bursts) }
-                HeroButton("Play Tinder mode", filled = false) { vm.tab(Screen.Quick) }
+                HeroButton("Play Tinder mode", filled = false) { if (hero != null) vm.startQuick(hero) else vm.tab(Screen.Quick) }
             }
         }
     }

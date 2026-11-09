@@ -11,6 +11,14 @@ Android app that suggests which photos to delete from a Sony RAW folder, and gro
 
 The first scan reads every RAW file once (a few minutes for ~9,000 photos). Later scans only look at new or changed photos.
 
+## What's new in 0.6
+- A scene always keeps at least one photo. If every frame has a problem, the best-scoring one stays as "Best of a weak set". (A lone photo with a problem is still suggested for deletion.)
+- Scenes are grouped by time first: frames under 5 seconds apart are always one scene. A frame joins a scene if it looks like any recent frame of it, with bright spots (lamps, flash) capped so one light can't split a burst. A lone frame joins a similar scene within 30 seconds. "Only shot of this scene" now means it.
+- "Why?" in the full-screen viewer (hold a photo): the grouping, sharpness, eyes, flash and rule behind each label, with the thresholds.
+- Viewer title names the group, e.g. "Scene 2 · 1 of 3" or "Single shots · 1 of 4".
+- Tinder mode: a new random order every round, at most 3 photos per outing so a round mixes outings.
+- Home: a random photo from the whole library, new each time the app opens (never the same as last time, never a near-black frame), with its date and place. Tap it to open that outing; "Play Tinder mode" starts the round with it.
+
 ## What's new in 0.5
 
 - Photos no longer turn sideways in the full-screen viewer, the Tinder card and Bursts: the large preview now follows the camera's orientation tag.
@@ -47,9 +55,9 @@ For a friend's phone, pick their folders in Settings. Any Sony body that writes 
 ## How it decides
 
 - **Preview, not RAW**: each ARW carries a JPEG preview. Keeper reads that (`analysis/ArwPreview.kt`).
-- **Scenes**: consecutive frames within 2 minutes whose blurred 24x24 fingerprints correlate above 0.65 (`logic/Organizer.kt`, `splitScenes`).
+- **Scenes** (`logic/Organizer.kt`, `splitScenes`): frames under 5 s apart are always one scene (burst). Otherwise, within 2 minutes, a frame joins the scene if its blurred 24x24 fingerprint correlates at least 0.65 with any of the scene's last 12 frames (bright spots capped, `Features.robustSimilarity`). Then a lone frame joins a neighbouring scene within 30 s if it correlates at least 0.5.
 - **Scores** (`analysis/Analyzer.kt`): sharpness on the strongest edges (on faces when there are faces), eyes open and smile from on-device face detection, near-black and blown-out share, flash fired.
-- **Calls** (`Organizer.decide`): anything edited stays. Frames that are blurry, eyes closed, flash not ready or too bright drop out. The best remaining frame is kept. If the top two are within 5% sharpness, both are marked *You choose*. Another good frame that looks clearly different is kept as *Different moment*. A set where nothing passes can end up with zero keepers.
+- **Calls** (`Organizer.decide`): anything edited stays. Frames that are blurry, eyes closed, flash not ready or too bright drop out. The best remaining frame is kept. If the top two are within 5% sharpness, both are marked *You choose*. Another good frame that looks clearly different is kept as *Different moment*. If nothing passes in a scene of 2 or more, the best-scoring frame is kept as *Best of a weak set*. Each decision carries a plain-language *why* shown in the viewer.
 - **Learning** (`logic/Learner.kt`): in scenes where you edited exactly one frame, the weights are nudged so that frame would win.
 - **Places**: GPS in the photo first, then phone photos at the same time (15 min, same outing, same day), then neighbouring days of the same trip. Names come from `assets/cities.csv` and `assets/areas.csv` (GeoNames, offline).
 - **Deleting**: through Android's own trash prompt. Restorable for 30 days, and there's an Undo.

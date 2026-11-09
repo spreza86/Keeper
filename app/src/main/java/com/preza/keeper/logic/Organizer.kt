@@ -36,6 +36,17 @@ class Organizer(
     private val homeCountry: String?,
     private val phoneMeta: (Long) -> PhoneMeta
 ) {
+    companion object {
+        /** Frames this close together are always one scene (a burst). */
+        const val BURST_SEC = 5.0
+        /** Within 2 minutes, a frame joins a scene when it looks at least this alike. */
+        const val SAME_SCENE = 0.65f
+        /** A lone frame joins a neighbouring scene this close in time... */
+        const val MERGE_SEC = 30.0
+        /** ...when it looks at least this alike. */
+        const val MERGE_SIM = 0.5f
+    }
+
     class Settings(
         val gapMin: Int,
         val weeks: Int,
@@ -163,7 +174,8 @@ class Organizer(
         fun isEditedCoarse(p: CamPhoto) = p.coarseKey?.let { it in edits.coarse } == true
         fun isEditedFull(p: CamPhoto) = p.fullKey?.let { it in edits.full } == true
 
-        val sessionScenes = raws.map { r -> splitScenes(r.ps) }
+        val splits = raws.map { r -> splitScenes(r.ps) }
+        val sessionScenes = splits.map { it.scenes }
         val refs = raws.map { r -> percentile(r.ps.map { it.photo.f.subjectSharp }, 0.75f).coerceAtLeast(0.01f) }
 
         val pairs = ArrayList<Pair<FloatArray, List<FloatArray>>>()
@@ -181,7 +193,7 @@ class Organizer(
 
         val keyFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val sessions = raws.mapIndexed { si, r ->
-            val scenes = sessionScenes[si].map { sc -> Scene("sc-${sc.first().photo.id}", decide(sc, refs[si], w, ::isEditedFull, ::isEditedCoarse)) }
+            val scenes = sessionScenes[si].map { sc -> Scene("sc-${sc.first().photo.id}", decide(sc, refs[si], w, ::isEditedFull, ::isEditedCoarse, splits[si].notes)) }
             val main = mainPlace(r.ps.mapNotNull { allPlaces[it.photo.id] })
             val start = r.ps.first().t
             Session(
@@ -280,7 +292,8 @@ class Organizer(
         ref: Float,
         w: FloatArray,
         editedFull: (CamPhoto) -> Boolean,
-        editedCoarse: (CamPhoto) -> Boolean
+        editedCoarse: (CamPhoto) -> Boolean,
+        groupNotes: Map<Long, String>
     ): List<Decision> {
         val ps = scene.map { it.photo }
         fun rel(p: CamPhoto) = p.f.subjectSharp / ref
@@ -295,8 +308,31 @@ class Organizer(
             else -> null
         }
 
+        /** The numbers behind each photo, in plain words, for the "Why?" panel. */
+        fun facts(p: CamPhoto): List<String> {
+            val l = ArrayList<String>()
+            groupNotes[p.id]?.let { l += it }
+            val slow = (p.exposure ?: 0.0) > 1.0 / 30
+            val limit = if (slow) 65 else 45
+            val on = if (p.f.faces > 0 && p.f.faceSharp > 0f) "on the face" else "whole frame"
+            l += "Sharpness ($on): ${pct(rel(p))} of this outing's sharp shots. Under $limit% counts as blurry" +
+                (if (slow) " (slow shutter ${shutter(p.exposure!!)})." else ".")
+            if (p.f.faces > 0) {
+                l += if (p.f.eyesOpen >= 0f)
+                    "Faces found: ${p.f.faces}. Lowest eyes-open score ${"%.2f".format(p.f.eyesOpen)}, under 0.25 counts as eyes closed."
+                else "Faces found: ${p.f.faces}. Eyes not readable."
+            }
+            if (p.flashFired == false && ps.any { it.flashFired == true })
+                l += "Flash did not fire. Brightness ${p.f.mean.toInt()} vs ${firedMean.toInt()} with flash (under 60% = flash not ready)."
+            if (p.f.blown > 0.10f) l += "Blown highlights: ${pct(p.f.blown)} of the frame, over 25% counts as too bright."
+            return l
+        }
+
         val out = LinkedHashMap<Long, Decision>()
         val kept = ArrayList<CamPhoto>()
+        fun put(p: CamPhoto, v: Verdict, reason: String, rule: String) {
+            out[p.id] = Decision(p, v, reason, (facts(p) + rule).joinToString("\n"))
+        }
 
         // Anything you edited stays.
         val full = ps.filter(editedFull)
@@ -304,7 +340,7 @@ class Organizer(
             val coarse = ps.filter(editedCoarse)
             if (coarse.isEmpty()) emptyList() else listOf(coarse.maxBy { score(it) })
         }
-        edited.forEach { out[it.id] = Decision(it, Verdict.KEEP, "Edited in Lightroom"); kept += it }
+        edited.forEach { put(it, Verdict.KEEP, "Edited in Lightroom", "Kept: it matches one of your Lightroom edits."); kept += it }
 
         val flags = ps.associate { it.id to flag(it) }
         val cands = ps.filter { it.id !in out && flags[it.id] == null }.sortedByDescending { score(it) }
@@ -313,8 +349,9 @@ class Organizer(
             val best = cands[0]
             val second = cands.getOrNull(1)
             if (second != null && (rel(best) - rel(second)) / rel(best).coerceAtLeast(0.01f) < 0.05f) {
-                out[best.id] = Decision(best, Verdict.CHOOSE, "Too close to call")
-                out[second.id] = Decision(second, Verdict.CHOOSE, "Too close to call")
+                val rule = "Your call: the two best frames are within 5% of each other on sharpness."
+                put(best, Verdict.CHOOSE, "Too close to call", rule)
+                put(second, Verdict.CHOOSE, "Too close to call", rule)
                 kept += best; kept += second
             } else {
                 val reason = when {
@@ -323,7 +360,9 @@ class Organizer(
                     best.f.faces > 0 -> "Sharp, eyes open"
                     else -> "Sharpest of ${ps.size}"
                 }
-                out[best.id] = Decision(best, Verdict.KEEP, reason)
+                val rule = if (ps.size == 1) "Kept: no other photo within 30 seconds looks like it, and nothing is wrong with it."
+                else "Kept: highest score of the ${ps.size} frames in this scene."
+                put(best, Verdict.KEEP, reason, rule)
                 kept += best
             }
         }
@@ -334,22 +373,108 @@ class Organizer(
             if (bestScore > 0f && score(c) >= 0.92f * bestScore &&
                 kept.all { Features.similarity(it.f.fp, c.f.fp) < 0.85f }
             ) {
-                out[c.id] = Decision(c, Verdict.KEEP, "Different moment")
+                put(c, Verdict.KEEP, "Different moment", "Kept: almost as good as the best frame (${pct(score(c) / bestScore)}) and looks different enough.")
                 kept += c
             }
         }
+        // Never wipe out a whole moment: if every frame was flagged, the least bad one stays.
+        if (kept.isEmpty() && ps.size >= 2) {
+            val best = ps.maxBy { score(it) }
+            val why = flags[best.id]?.let { " It was flagged \"$it\", so check it." } ?: ""
+            put(best, Verdict.KEEP, "Best of a weak set", "Kept: every frame in this scene had a problem, so the best-scoring one stays.$why")
+            kept += best
+        }
         for (p in ps) {
             if (p.id in out) continue
-            out[p.id] = Decision(p, Verdict.DELETE, flags[p.id] ?: "Duplicate")
+            val f = flags[p.id]
+            put(p, Verdict.DELETE, f ?: "Duplicate",
+                if (f != null) "Suggested for deletion: \"$f\" (see the numbers above), and a better frame of this scene is kept."
+                else "Suggested for deletion: a better, similar frame of this scene is kept.")
         }
         return ps.map { out[it.id]!! }
     }
 
-    // ---------- helpers ----------
+    // ---------- scenes ----------
 
-    private fun splitScenes(ps: List<P>): List<List<P>> = splitBy(ps) { a, b ->
-        Duration.between(a.t, b.t).seconds > 120 || Features.similarity(a.photo.f.fp, b.photo.f.fp) < 0.65f
+    private class Split(val scenes: List<List<P>>, val notes: Map<Long, String>)
+
+    /**
+     * Time first: frames a few seconds apart are one scene whatever they look like. Within 2 minutes a frame
+     * joins the scene if it looks like any recent frame of it. Then lone frames are joined to a close, similar
+     * neighbour, so "Only shot of this scene" is only said when it is true.
+     */
+    private fun splitScenes(ps: List<P>): Split {
+        val notes = HashMap<Long, String>()
+        val scenes = ArrayList<MutableList<P>>()
+        for (p in ps) {
+            val cur = scenes.lastOrNull()
+            if (cur == null) {
+                scenes += mutableListOf(p)
+                notes[p.photo.id] = "Grouping: first photo of the outing."
+                continue
+            }
+            val gap = Duration.between(cur.last().t, p.t).toMillis() / 1000.0
+            val sim = cur.takeLast(12).maxOf { Features.robustSimilarity(it.photo.f.fp, p.photo.f.fp) }
+            when {
+                gap <= BURST_SEC -> {
+                    cur += p
+                    notes[p.photo.id] = "Grouping: ${secs(gap)} after the previous photo, so same burst (under ${BURST_SEC.toInt()} s always groups)."
+                }
+                gap <= 120 && sim >= SAME_SCENE -> {
+                    cur += p
+                    notes[p.photo.id] = "Grouping: ${secs(gap)} after the previous photo and looks alike (${"%.2f".format(sim)}, needs $SAME_SCENE)."
+                }
+                else -> {
+                    scenes += mutableListOf(p)
+                    notes[p.photo.id] = if (gap > 120) "Grouping: new scene, ${secs(gap)} after the previous photo."
+                    else "Grouping: new scene, ${secs(gap)} later but looks different (${"%.2f".format(sim)}, needs $SAME_SCENE)."
+                }
+            }
+        }
+        // Second pass: a lone frame joins the closer, more similar neighbouring scene.
+        var i = 0
+        while (i < scenes.size) {
+            val sc = scenes[i]
+            if (sc.size == 1) {
+                val p = sc[0]
+                fun fit(other: List<P>?, edge: P?): Pair<Float, Double>? {
+                    if (other == null || edge == null) return null
+                    val gap = abs(Duration.between(edge.t, p.t).toMillis()) / 1000.0
+                    if (gap > MERGE_SEC) return null
+                    val s = other.maxOf { Features.robustSimilarity(it.photo.f.fp, p.photo.f.fp) }
+                    return if (s >= MERGE_SIM) s to gap else null
+                }
+                val prev = scenes.getOrNull(i - 1)
+                val next = scenes.getOrNull(i + 1)
+                val a = fit(prev, prev?.last())
+                val b = fit(next, next?.first())
+                val target = when {
+                    a != null && (b == null || a.first >= b.first) -> prev!!.also { it.add(p) } to a
+                    b != null -> next!!.also { it.add(0, p) } to b
+                    else -> null
+                }
+                if (target != null) {
+                    val (s, gap) = target.second
+                    notes[p.photo.id] = "Grouping: joined a scene ${secs(gap)} away that looks alike (${"%.2f".format(s)}, needs $MERGE_SIM for a lone photo)."
+                    scenes.removeAt(i)
+                    continue
+                }
+            }
+            i++
+        }
+        return Split(scenes, notes)
     }
+
+    private fun secs(s: Double): String = when {
+        s < 10 -> "%.1f s".format(s)
+        s < 120 -> "${s.toInt()} s"
+        s < 7200 -> "${(s / 60).toInt()} min"
+        else -> "${(s / 3600).toInt()} h"
+    }
+
+    private fun pct(v: Float): String = "${(v * 100).toInt()}%"
+
+    private fun shutter(e: Double): String = if (e >= 1.0) "%.1f s".format(e) else "1/${Math.round(1 / e)} s"
 
     private fun <T> splitBy(list: List<T>, breakBetween: (T, T) -> Boolean): List<List<T>> {
         if (list.isEmpty()) return emptyList()

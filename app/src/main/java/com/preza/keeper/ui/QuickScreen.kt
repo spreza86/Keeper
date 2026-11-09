@@ -137,7 +137,10 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
             if (offset > 60f) Stamp("KEEP", Color(0xFF7BD88F), Modifier.align(Alignment.TopStart))
         }
 
-        Text("Similar shots (${card.scene.size - 1})", color = K.Text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (card.scene.size > 1) "Similar shots (${card.scene.size - 1})" else "No similar shots: this is the only frame of this scene",
+            color = K.Text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+        )
         Column(Modifier.fillMaxWidth().weight(0.85f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             others.chunked(3).forEach { row ->
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(5.dp)) {

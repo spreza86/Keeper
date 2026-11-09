@@ -120,7 +120,7 @@ fun SetDetailScreen(state: UiState, vm: AppViewModel, key: String) {
                         Fmt.day(s.start, s.offset),
                         listOfNotNull(Fmt.range(s.start, s.end, s.offset), s.place?.let { p -> listOfNotNull(p.area, p.city).joinToString(", ") },
                             Fmt.plural(s.photos.size, "photo")).joinToString(" · "),
-                        onBack = { vm.back() }, backLabel = "Sets"
+                        onBack = { vm.back() }, backLabel = if (state.stack.dropLast(1).lastOrNull() == Screen.Sets) "Sets" else "Back"
                     )
                     Column(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(K.Hero).padding(horizontal = 16.dp, vertical = 12.dp)
@@ -212,7 +212,7 @@ private fun SceneBlock(
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 row.forEach { d ->
                     Box(Modifier.weight(1f)) {
-                        DecisionTile(d, vm.isKept(d, state.overrides), state.overrides[d.photo.id], onLongClick = { vm.openViewer(tiles, tiles.indexOf(d)) }) { vm.toggle(d) }
+                        DecisionTile(d, vm.isKept(d, state.overrides), state.overrides[d.photo.id], onLongClick = { vm.openViewer(tiles, tiles.indexOf(d), label = title) }) { vm.toggle(d) }
                     }
                 }
                 repeat(4 - row.size) { Box(Modifier.weight(1f)) }

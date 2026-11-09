@@ -37,6 +37,11 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet("doneBursts", emptySet())!!.toSet()
         set(v) = sp.edit().putStringSet("doneBursts", v).apply()
 
+    /** Photo shown behind the Home hero last time, so the next app open picks another one. */
+    var lastHero: Long
+        get() = sp.getLong("lastHero", -1L)
+        set(v) = sp.edit().putLong("lastHero", v).apply()
+
     var weights: FloatArray
         get() = sp.getString("w", null)
             ?.split(",")?.mapNotNull { it.toFloatOrNull() }?.toFloatArray()

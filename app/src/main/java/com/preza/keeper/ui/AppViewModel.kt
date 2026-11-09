@@ -54,8 +54,12 @@ sealed interface Screen {
 
 class QuickCard(val decision: Decision, val scene: Scene)
 
+/** The photo behind the Home hero: picked at random once per app open. */
+class HeroPick(val decision: Decision, val scene: Scene, val session: Session)
+
 /** Full-screen photo viewer: the frames of one scene, or two frames side by side to compare. */
-class ViewerState(val decisions: List<Decision>, val index: Int, val compare: Boolean)
+/** [label] names the group in the title, e.g. "Scene 2" or "Single shots". */
+class ViewerState(val decisions: List<Decision>, val index: Int, val compare: Boolean, val label: String? = null)
 
 data class UiState(
     val permission: Boolean = false,
@@ -83,7 +87,8 @@ data class UiState(
     val quickKept: Int = 0,
     val error: String? = null,
     val stats: com.preza.keeper.data.Stats.Snapshot? = null,
-    val viewer: ViewerState? = null
+    val viewer: ViewerState? = null,
+    val hero: HeroPick? = null
 ) {
     val screen: Screen get() = stack.last()
 }
@@ -249,7 +254,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         prefs.weights = lib.weights
-        _ui.update { it.copy(library = lib, learned = Learner.describe(lib.weights, lib.learnedPairs)) }
+        _ui.update { it.copy(library = lib, learned = Learner.describe(lib.weights, lib.learnedPairs), hero = heroFor(lib, it.hero, it.trashed)) }
+    }
+
+    /**
+     * Keeps the current hero photo while the app stays open (re-found in the new library), else picks a random
+     * photo from the whole library: any photo, not the one shown last time, never a near-black frame.
+     */
+    private fun heroFor(lib: Library, current: HeroPick?, trashed: Set<Long>): HeroPick? {
+        val all = lib.sessions.flatMap { se -> se.scenes.flatMap { sc -> sc.decisions.map { HeroPick(it, sc, se) } } }
+            .filter { it.decision.photo.id !in trashed }
+        if (current != null) all.firstOrNull { it.decision.photo.id == current.decision.photo.id }?.let { return it }
+        val last = prefs.lastHero
+        val pool = all.filter { it.decision.photo.f.mean >= 18f && it.decision.photo.id != last }.ifEmpty { all }
+        val pick = pool.randomOrNull() ?: return null
+        prefs.lastHero = pick.decision.photo.id
+        return pick
     }
 
     private fun reorganize() {
@@ -272,22 +292,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- quick clean ----------
 
-    /** Up to 20 weak frames from groups of similar shots, mixed across outings, not decided yet. */
-    fun startQuick() {
+    /**
+     * Up to 20 weak frames from groups of similar shots, in a new random order every round, at most 3 per outing
+     * so a round mixes outings. [first] (the Home hero photo) opens the round when given.
+     */
+    fun startQuick(first: HeroPick? = null) {
         val st = _ui.value
         val lib = st.library ?: return
-        val perSession = lib.sessions.sortedByDescending { it.start }.map { s ->
+        val pool = lib.sessions.flatMap { s ->
             s.scenes.filter { it.size >= 2 }.flatMap { sc ->
                 sc.decisions.filter { it.verdict == Verdict.DELETE && it.photo.id !in st.trashed && st.overrides[it.photo.id] == null }
-                    .map { QuickCard(it, sc) }
+                    .map { s.key to QuickCard(it, sc) }
             }
-        }.filter { it.isNotEmpty() }
+        }.filter { it.second.decision.photo.id != first?.decision?.photo?.id }.shuffled()
         val cards = ArrayList<QuickCard>()
-        var k = 0
-        while (cards.size < 20 && perSession.any { it.size > k }) {
-            for (l in perSession) if (l.size > k && cards.size < 20) cards += l[k]
-            k += 2
+        if (first != null && first.decision.photo.id !in st.trashed) cards += QuickCard(first.decision, first.scene)
+        val perSession = HashMap<String, Int>()
+        val skipped = ArrayList<QuickCard>()
+        for ((key, card) in pool) {
+            if (cards.size >= 20) break
+            val n = perSession[key] ?: 0
+            if (n < 3) { cards += card; perSession[key] = n + 1 } else skipped += card
         }
+        for (card in skipped) { if (cards.size >= 20) break; cards += card }
         if (cards.isEmpty()) { toast("Nothing to swipe right now. Nice."); return }
         _ui.update { it.copy(quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, stack = listOf(Screen.Quick)) }
     }
@@ -320,9 +347,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- viewer ----------
 
-    fun openViewer(decisions: List<Decision>, index: Int, compare: Boolean = false) {
+    fun openViewer(decisions: List<Decision>, index: Int, compare: Boolean = false, label: String? = null) {
         if (decisions.isEmpty()) return
-        _ui.update { it.copy(viewer = ViewerState(decisions, index.coerceIn(0, decisions.size - 1), compare)) }
+        _ui.update { it.copy(viewer = ViewerState(decisions, index.coerceIn(0, decisions.size - 1), compare, label)) }
     }
 
     fun closeViewer() = _ui.update { it.copy(viewer = null) }

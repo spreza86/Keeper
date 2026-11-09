@@ -53,7 +53,8 @@ class Place(
 
 enum class Verdict { KEEP, CHOOSE, DELETE }
 
-class Decision(val photo: CamPhoto, val verdict: Verdict, val reason: String)
+/** [why] is the plain-language trail of numbers and rules behind [reason], shown in the viewer. */
+class Decision(val photo: CamPhoto, val verdict: Verdict, val reason: String, val why: String = "")
 
 class Scene(val key: String, val decisions: List<Decision>) {
     val size: Int get() = decisions.size
