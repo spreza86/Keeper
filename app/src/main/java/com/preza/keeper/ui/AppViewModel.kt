@@ -22,6 +22,7 @@ import com.preza.keeper.data.Scene
 import com.preza.keeper.data.Session
 import com.preza.keeper.data.Thumbs
 import com.preza.keeper.data.Verdict
+import com.preza.keeper.logic.Checks
 import com.preza.keeper.logic.Learner
 import com.preza.keeper.logic.Organizer
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +89,19 @@ data class UiState(
     val error: String? = null,
     val stats: com.preza.keeper.data.Stats.Snapshot? = null,
     val viewer: ViewerState? = null,
-    val hero: HeroPick? = null
+    val hero: HeroPick? = null,
+    /** Your saved choices (photo id -> keep), see Prefs.decided. */
+    val decided: Map<Long, Boolean> = emptyMap(),
+    /** Scenes ticked "Done" in a set, during this visit. */
+    val checked: Set<String> = emptySet(),
+    val setsSort: String = "random",
+    val burstsSort: String = "random",
+    val colorTheme: String = "olive",
+    /** Where you are in Bursts during this visit. */
+    val burstKey: String? = null,
+    val burstIdx: Int = 0,
+    /** What your corrections changed, one line per check. */
+    val loosened: String = ""
 ) {
     val screen: Screen get() = stack.last()
 }
@@ -104,8 +117,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val stats = com.preza.keeper.data.Stats(ctx)
 
     private val _ui = MutableStateFlow(
-        UiState(stats = stats.snapshot(), camFolder = prefs.cameraFolder, editsFolder = prefs.editsFolder, gap = prefs.gapMinutes, weeks = prefs.weeks, appearance = prefs.appearance)
+        prefs.decided.let { d ->
+            UiState(
+                stats = stats.snapshot(), camFolder = prefs.cameraFolder, editsFolder = prefs.editsFolder, gap = prefs.gapMinutes,
+                weeks = prefs.weeks, appearance = prefs.appearance, colorTheme = prefs.colorTheme,
+                setsSort = prefs.setsSort, burstsSort = prefs.burstsSort, decided = d, overrides = d
+            )
+        }
     )
+
+    /** What your corrections taught each check. */
+    private val checks = Checks.read(prefs.loosen)
+
+    /** Random orders are drawn from this, so they change each time the app opens but hold during a visit. */
+    private val seed = kotlin.random.Random.nextLong()
     val ui = _ui.asStateFlow()
 
     /** MainActivity launches these: Android shows its own "move to trash?" prompt. */
@@ -115,13 +140,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var editKeys = EditKeys(emptySet(), emptySet())
     private var phone: List<PhonePhoto> = emptyList()
 
-    private class Pending(val ids: List<Long>, val restore: Boolean, val source: String)
+    private class Pending(
+        val ids: List<Long>,
+        val restore: Boolean,
+        val source: String,
+        /** Choices to save once the trash prompt is accepted. */
+        val save: Map<Long, Boolean> = emptyMap(),
+        /** Decisions to learn from once the trash prompt is accepted. */
+        val learn: List<Decision> = emptyList(),
+        /** Leave the set screen afterwards (the whole set was handled). */
+        val closeAfter: Boolean = true
+    )
     private var pending: Pending? = null
 
     private sealed interface Action
-    private class Trashed(val ids: List<Long>, val source: String) : Action
+    private class Trashed(val ids: List<Long>, val source: String, val saved: Set<Long>) : Action
     private class KeptSet(val key: String) : Action
-    private class BurstDone(val key: String) : Action
+    private class BurstDone(val key: String, val saved: Set<Long>) : Action
     private var lastAction: Action? = null
 
     private var scanJob: Job? = null
@@ -250,11 +285,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val lib = withContext(Dispatchers.IO) {
             Organizer(geo, ZoneId.systemDefault(), Instant.now(), java.util.Locale.getDefault().country, ::phoneMeta).build(
                 camPhotos.filter { it.id !in trashed }, editKeys, phone,
-                Organizer.Settings(prefs.gapMinutes, prefs.weeks, prefs.keptSessions, prefs.doneBursts, prefs.tripNames)
+                Organizer.Settings(
+                    prefs.gapMinutes, prefs.weeks, prefs.keptSessions, prefs.doneBursts, prefs.tripNames,
+                    decided = _ui.value.decided.keys, loosen = Checks.levels(checks), loosenNotes = checks.mapValues { it.value.note }
+                )
             )
         }
         prefs.weights = lib.weights
-        _ui.update { it.copy(library = lib, learned = Learner.describe(lib.weights, lib.learnedPairs), hero = heroFor(lib, it.hero, it.trashed)) }
+        _ui.update {
+            it.copy(
+                library = lib, learned = Learner.describe(lib.weights, lib.learnedPairs), loosened = Checks.describe(checks),
+                hero = heroFor(lib, it.hero, it.trashed)
+            )
+        }
     }
 
     /**
@@ -290,6 +333,104 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(overrides = it.overrides + values) }
     }
 
+    /** A scene you already reviewed: all its photos have a saved choice. */
+    fun reviewed(sc: Scene, decided: Map<Long, Boolean> = _ui.value.decided): Boolean = sc.decisions.all { it.photo.id in decided }
+
+    // ---------- saved choices and learning ----------
+
+    private fun commitSave(save: Map<Long, Boolean>, learn: List<Decision>) {
+        if (save.isNotEmpty()) {
+            val all = prefs.decided + save
+            prefs.decided = all
+            _ui.update { it.copy(decided = all, overrides = it.overrides + save) }
+        }
+        learnFrom(learn.map { it to (save[it.photo.id] ?: isKept(it)) })
+    }
+
+    /**
+     * Each confirmed choice on a photo Keeper suggested deleting teaches the check that flagged it:
+     * keeping it is a vote to loosen, deleting it a vote to keep the check as it is.
+     */
+    private fun learnFrom(answers: List<Pair<Decision, Boolean>>) {
+        var changed = false
+        for ((d, kept) in answers) {
+            if (d.verdict != Verdict.DELETE) continue
+            d.flag?.let { if (Checks.record(checks, it, kept)) changed = true }
+            if (d.eyesLow && Checks.record(checks, Checks.EYES, kept)) changed = true
+        }
+        prefs.loosen = Checks.write(checks)
+        if (changed) toast("Keeper adjusted a check from your choices. See Settings.")
+    }
+
+    /** Settings: start over. Saved choices and what was learned from them are cleared. */
+    fun forgetChoices() {
+        prefs.decided = emptyMap()
+        checks.values.forEach { it.level = 0; it.recent = ""; it.note = "" }
+        prefs.loosen = Checks.write(checks)
+        _ui.update { it.copy(decided = emptyMap(), overrides = emptyMap(), checked = emptySet()) }
+        toast("Choices forgotten")
+        reorganize()
+    }
+
+    // ---------- sets: Done checks and partial delete ----------
+
+    fun toggleChecked(key: String) = _ui.update { it.copy(checked = if (key in it.checked) it.checked - key else it.checked + key) }
+    fun check(key: String) = _ui.update { it.copy(checked = it.checked + key) }
+
+    /**
+     * Finishes part of a set (the checked scenes) or all of it: deletes what is marked delete, then saves
+     * every choice so these scenes are not suggested again.
+     */
+    fun finishScenes(target: List<Decision>, wholeSet: Boolean) {
+        val save = target.associate { it.photo.id to isKept(it) }
+        val del = target.filter { !isKept(it) }.map { it.photo.id }
+        if (del.isEmpty()) {
+            commitSave(save, target)
+            _ui.update { it.copy(checked = emptySet()) }
+            toast(if (wholeSet) "Set reviewed, all kept" else "Saved, these scenes won't be suggested again")
+            if (wholeSet && _ui.value.screen is Screen.SetDetail) back()
+            reorganize()
+        } else {
+            requestTrash(del, source = "Sets", save = save, learn = target, closeAfter = wholeSet)
+        }
+    }
+
+    // ---------- sorting ----------
+
+    fun setSetsSort(v: String) { prefs.setsSort = v; _ui.update { it.copy(setsSort = v) } }
+    fun setBurstsSort(v: String) { prefs.burstsSort = v; _ui.update { it.copy(burstsSort = v, burstKey = null, burstIdx = 0) } }
+
+    private fun shuffleKey(key: String): Long = java.util.Random(seed xor key.hashCode().toLong()).nextLong()
+
+    /** Space the suggested deletions would free, counting only scenes not reviewed yet. */
+    fun toFree(scenes: List<Scene>, st: UiState = _ui.value): Long =
+        scenes.filter { !reviewed(it, st.decided) }.sumOf { sc -> sc.decisions.filter { !isKept(it, st.overrides) }.sumOf { it.photo.size } }
+
+    fun sortedSets(list: List<Session>, st: UiState): List<Session> = when (st.setsSort) {
+        "newest" -> list.sortedByDescending { it.start }
+        "oldest" -> list.sortedBy { it.start }
+        "free" -> list.sortedByDescending { toFree(it.scenes, st) }
+        else -> list.sortedBy { shuffleKey(it.key) }
+    }
+
+    fun sortedBursts(list: List<Pair<Session, Scene>>, st: UiState): List<Pair<Session, Scene>> = when (st.burstsSort) {
+        "newest" -> list.sortedByDescending { it.first.start }
+        "oldest" -> list.sortedBy { it.first.start }
+        "free" -> list.sortedByDescending { toFree(listOf(it.second), st) }
+        else -> list.sortedBy { shuffleKey(it.second.key) }
+    }
+
+    /** Moves to burst [i] (wraps around) and remembers it for this visit. */
+    fun burstGo(list: List<Pair<Session, Scene>>, i: Int) {
+        if (list.isEmpty()) return
+        val j = i.mod(list.size)
+        _ui.update { it.copy(burstKey = list[j].second.key, burstIdx = j) }
+    }
+
+    // ---------- appearance ----------
+
+    fun setColorTheme(v: String) { prefs.colorTheme = v; _ui.update { it.copy(colorTheme = v) } }
+
     // ---------- quick clean ----------
 
     /**
@@ -316,13 +457,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         for (card in skipped) { if (cards.size >= 20) break; cards += card }
         if (cards.isEmpty()) { toast("Nothing to swipe right now. Nice."); return }
+        roundCounted.clear()
         _ui.update { it.copy(quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, stack = listOf(Screen.Quick)) }
     }
+
+    /** Photos already counted for learning in this Tinder round. */
+    private val roundCounted = HashSet<Long>()
 
     fun quickDecide(keep: Boolean) {
         val st = _ui.value
         val card = st.quick.getOrNull(st.quickIndex) ?: return
         val id = card.decision.photo.id
+        // Swipes are not saved as choices (photos can come back), but they do teach the checks.
+        if (roundCounted.add(id)) learnFrom(listOf(card.decision to keep))
         _ui.update {
             it.copy(
                 overrides = it.overrides + (id to keep),
@@ -370,20 +517,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun keepAllBurst(scene: Scene) {
         prefs.doneBursts = prefs.doneBursts + scene.key
-        lastAction = BurstDone(scene.key)
+        val save = scene.decisions.associate { it.photo.id to true }
+        commitSave(save, scene.decisions)
+        lastAction = BurstDone(scene.key, save.keys)
         toast("Kept all ${scene.size} frames", undo = true)
         reorganize()
     }
 
     fun cullBurst(scene: Scene) {
-        requestTrash(scene.decisions.filter { !isKept(it) }.map { it.photo.id }, source = "Bursts")
+        requestTrash(
+            scene.decisions.filter { !isKept(it) }.map { it.photo.id }, source = "Bursts",
+            save = scene.decisions.associate { it.photo.id to isKept(it) }, learn = scene.decisions
+        )
     }
 
-    private fun requestTrash(ids: List<Long>, restore: Boolean = false, source: String = "Sets") {
+    private fun requestTrash(
+        ids: List<Long>, restore: Boolean = false, source: String = "Sets",
+        save: Map<Long, Boolean> = emptyMap(), learn: List<Decision> = emptyList(), closeAfter: Boolean = true
+    ) {
         if (ids.isEmpty()) return
         val uris = ids.map { repo.uri(it) }
         val pi = MediaStore.createTrashRequest(ctx.contentResolver, uris, !restore)
-        pending = Pending(ids, restore, source)
+        pending = Pending(ids, restore, source, save, learn, closeAfter)
         trashRequests.tryEmit(pi.intentSender)
     }
 
@@ -396,9 +551,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(stats = stats.snapshot()) }
         if (!p.restore) {
             _ui.update { it.copy(trashed = it.trashed + p.ids) }
-            lastAction = Trashed(p.ids, p.source)
+            commitSave(p.save, p.learn)
+            if (p.source == "Sets") _ui.update { it.copy(checked = emptySet()) }
+            lastAction = Trashed(p.ids, p.source, p.save.keys)
             toast("Moved ${p.ids.size} ${if (p.ids.size == 1) "photo" else "photos"} to trash · ${Fmt.gb(bytes)} freed", undo = true)
-            if (_ui.value.screen is Screen.SetDetail) back()
+            if (p.closeAfter && _ui.value.screen is Screen.SetDetail) back()
         } else {
             _ui.update { it.copy(trashed = it.trashed - p.ids.toSet()) }
             toast("Restored")
@@ -408,12 +565,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun undo() {
         when (val a = lastAction) {
-            is Trashed -> requestTrash(a.ids, restore = true, source = a.source)
+            is Trashed -> { unsave(a.saved); requestTrash(a.ids, restore = true, source = a.source) }
             is KeptSet -> { prefs.keptSessions = prefs.keptSessions - a.key; toast("Restored"); reorganize() }
-            is BurstDone -> { prefs.doneBursts = prefs.doneBursts - a.key; toast("Restored"); reorganize() }
+            is BurstDone -> { prefs.doneBursts = prefs.doneBursts - a.key; unsave(a.saved); toast("Restored"); reorganize() }
             null -> {}
         }
         lastAction = null
+    }
+
+    /** Undo: the scenes come back as not reviewed. */
+    private fun unsave(ids: Set<Long>) {
+        if (ids.isEmpty()) return
+        val all = prefs.decided - ids
+        prefs.decided = all
+        _ui.update { it.copy(decided = all, overrides = it.overrides - ids) }
     }
 
     private fun toast(msg: String, undo: Boolean = false) {

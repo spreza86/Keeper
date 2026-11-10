@@ -36,9 +36,11 @@ import com.preza.keeper.data.Verdict
 @Composable
 fun BurstsScreen(state: UiState, vm: AppViewModel) {
     val lib = state.library
-    val bursts = lib?.bursts.orEmpty()
-    var rawIndex by remember { mutableStateOf(0) }
-    val index = if (bursts.isEmpty()) 0 else rawIndex.mod(bursts.size)
+    // Order follows your sort choice; your place is kept during this visit (Next and Skip move along it).
+    val bursts = lib?.bursts.orEmpty().let { vm.sortedBursts(it, state) }
+    val index = if (bursts.isEmpty()) 0 else bursts.indexOfFirst { it.second.key == state.burstKey }.takeIf { it >= 0 }
+        ?: state.burstIdx.coerceIn(0, bursts.size - 1)
+    fun go(i: Int) = vm.burstGo(bursts, i)
 
     LazyColumn(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 96.dp),
@@ -47,6 +49,7 @@ fun BurstsScreen(state: UiState, vm: AppViewModel) {
         item {
             Title("Bursts", if (bursts.isEmpty()) null else "${index + 1} of ${Fmt.n(bursts.size)}")
         }
+        if (bursts.isNotEmpty()) item { SortChips(state.burstsSort) { vm.setBurstsSort(it) } }
         if (bursts.isEmpty()) {
             item { Note(if (lib == null) "Still scanning..." else "All bursts are culled.") }
             return@LazyColumn
@@ -79,15 +82,15 @@ fun BurstsScreen(state: UiState, vm: AppViewModel) {
                         Text(
                             sel.reason,
                             modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(50))
-                                .background(if (sel.verdict == Verdict.CHOOSE) K.Blue else K.Accent).padding(horizontal = 10.dp, vertical = 4.dp),
-                            color = K.OnAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                .background(if (sel.verdict == Verdict.CHOOSE) K.Blue else K.Keep).padding(horizontal = 10.dp, vertical = 4.dp),
+                            color = K.OnKeep, fontSize = 12.sp, fontWeight = FontWeight.Bold
                         )
                     }
                 }
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     itemsIndexed(ds, key = { _, d -> d.photo.id }) { i, d ->
                         val kept = vm.isKept(d, state.overrides)
-                        val color = if (d.verdict == Verdict.CHOOSE && state.overrides[d.photo.id] == null) K.Blue else K.Accent
+                        val color = if (d.verdict == Verdict.CHOOSE && state.overrides[d.photo.id] == null) K.Blue else K.Keep
                         Box(
                             Modifier.size(68.dp).clip(RoundedCornerShape(8.dp))
                                 .combinedClickable(
@@ -109,7 +112,7 @@ fun BurstsScreen(state: UiState, vm: AppViewModel) {
                     val f = sel.photo.f
                     if (f.faces > 0) {
                         Stat("Faces", "${f.faces}", null)
-                        if (f.eyesOpen >= 0f) Stat("Eyes open", if (f.eyesOpen > 0.25f) "Yes" else "Closed", f.eyesOpen > 0.25f)
+                        if (f.eyesOpen >= 0f) Stat("Eyes open", if (f.eyesOpen > 0.25f) "Yes" else "Maybe not (only lowers the ranking)", if (f.eyesOpen > 0.25f) true else null)
                     }
                     Stat(
                         "Exposure",
@@ -130,14 +133,14 @@ fun BurstsScreen(state: UiState, vm: AppViewModel) {
                     Primary(
                         if (delCount == 0) "Next" else "Keep $keptCount, delete $delCount",
                         {
-                            if (delCount == 0) rawIndex = index + 1 else vm.cullBurst(scene)
+                            if (delCount == 0) { vm.keepAllBurst(scene); go(index) } else vm.cullBurst(scene)
                         },
                         danger = delCount > 0, weight = 1.6f
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Secondary("Previous", { rawIndex = index - 1 + bursts.size })
-                    Secondary("Skip", { rawIndex = index + 1 })
+                    Secondary("Previous", { go(index - 1) })
+                    Secondary("Skip", { go(index + 1) })
                 }
             }
         }

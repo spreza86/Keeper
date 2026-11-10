@@ -146,13 +146,13 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     row.forEach { d ->
                         val best = d.verdict != Verdict.DELETE
-                        Box(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(10.dp)).ring(best, K.Accent, 10)) {
+                        Box(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(10.dp)).ring(best, K.Keep, 10)) {
                             Thumb(d.photo.id, Modifier.fillMaxSize())
                             if (best) Text(
                                 "Best",
                                 modifier = Modifier.align(Alignment.TopStart).padding(5.dp).clip(RoundedCornerShape(8.dp))
-                                    .background(K.Accent).padding(horizontal = 7.dp, vertical = 1.dp),
-                                color = K.OnAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold
+                                    .background(K.Keep).padding(horizontal = 7.dp, vertical = 1.dp),
+                                color = K.OnKeep, fontSize = 10.sp, fontWeight = FontWeight.Bold
                             )
                         }
                     }
@@ -169,7 +169,7 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
             ) { Icon(Icons.Filled.Close, contentDescription = "Delete this photo") }
             FilledIconButton(
                 onClick = { vm.quickDecide(true) }, modifier = Modifier.size(62.dp), shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = K.Accent, contentColor = K.OnAccent)
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = K.Keep, contentColor = K.OnKeep)
             ) { Icon(Icons.Filled.Check, contentDescription = "Keep this photo") }
         }
     }

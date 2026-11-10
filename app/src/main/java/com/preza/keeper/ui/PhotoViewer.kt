@@ -195,9 +195,9 @@ private fun TopBar(title: String, chip: String?, why: (() -> Unit)? = null, whyO
         )
         if (why != null) Text(
             if (whyOpen) "Hide" else "Why?",
-            modifier = Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(Color(0xFFB1D18A))
+            modifier = Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(K.Bright)
                 .clickable(onClick = why).padding(horizontal = 10.dp, vertical = 4.dp),
-            color = Color(0xFF1F3701), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+            color = K.OnBright, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
         )
     }
 }

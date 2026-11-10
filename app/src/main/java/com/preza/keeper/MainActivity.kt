@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val st by vm.ui.collectAsStateWithLifecycle()
-            KeeperTheme(st.appearance) { KeeperApp(vm) }
+            KeeperTheme(st.appearance, st.colorTheme) { KeeperApp(vm) }
         }
     }
 }

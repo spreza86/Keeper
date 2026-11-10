@@ -12,8 +12,8 @@ android {
         applicationId = "com.preza.keeper"
         minSdk = 30          // Android 11: needed for the system trash
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6"
+        versionCode = 7
+        versionName = "0.7"
     }
 
     // Fixed signing key, kept in the repo: every build from any session signs the same way,

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -174,5 +175,40 @@ fun ListRow(
 
 fun Modifier.rounded(r: Int = 8): Modifier = this.clip(RoundedCornerShape(r.dp))
 
-fun Modifier.ring(on: Boolean, color: Color = K.Accent, r: Int = 8): Modifier =
+fun Modifier.ring(on: Boolean, color: Color = K.Keep, r: Int = 8): Modifier =
     if (on) this.border(3.dp, color, RoundedCornerShape(r.dp)) else this
+
+val SORTS = listOf("random" to "Random", "newest" to "Newest", "oldest" to "Oldest", "free" to "Most to free")
+
+/** Sort choices for Sets and Bursts. The pick is remembered. */
+@Composable
+fun SortChips(current: String, onPick: (String) -> Unit) {
+    androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(SORTS.size) { i ->
+            val (key, label) = SORTS[i]
+            val on = key == current
+            Text(
+                label,
+                modifier = Modifier.clip(RoundedCornerShape(50))
+                    .then(if (on) Modifier.background(K.Hero) else Modifier.border(1.dp, K.Outline, RoundedCornerShape(50)))
+                    .clickable { onPick(key) }.heightIn(min = 36.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+                color = if (on) K.OnHero else K.Soft, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+/** The "Done" check on a scene: ticked scenes are the ones the delete button acts on. */
+@Composable
+fun DoneCheck(on: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(16.dp))
+            .then(if (on) Modifier.background(K.Keep) else Modifier.border(1.dp, K.Outline, RoundedCornerShape(16.dp)))
+            .clickable(onClick = onClick).heightIn(min = 34.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(androidx.compose.material.icons.Icons.Filled.Check, contentDescription = null, tint = if (on) K.OnKeep else K.Soft, modifier = Modifier.size(16.dp))
+        Text("Done", color = if (on) K.OnKeep else K.Soft, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}

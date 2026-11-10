@@ -21,7 +21,13 @@ data class Palette(
     val text: Color, val soft: Color, val muted: Color,
     val accent: Color, val onAccent: Color, val hero: Color, val onHero: Color,
     val danger: Color, val onDanger: Color, val blue: Color, val green: Color, val purple: Color, val grey: Color,
-    val fade: Color, val inverseAccent: Color, val outline: Color, val dark: Boolean
+    val fade: Color, val inverseAccent: Color, val outline: Color, val dark: Boolean,
+    /** Keep is always green and delete always red, whatever the theme. */
+    val keep: Color = if (dark) Color(0xFFB1D18A) else Color(0xFF4C662B),
+    val onKeep: Color = if (dark) Color(0xFF1F3701) else Color(0xFFFFFFFF),
+    /** A bright accent that reads on top of photos (Home hero buttons, "Why?"). */
+    val bright: Color = Color(0xFFB1D18A),
+    val onBright: Color = Color(0xFF1F3701)
 )
 
 val LightPalette = Palette(
@@ -41,6 +47,51 @@ val DarkPalette = Palette(
     purple = Color(0xFFCDB4F0), grey = Color(0xFF6B665C),
     fade = Color(0x9915130F), inverseAccent = Color(0xFF4C662B), outline = Color(0xFF958F80), dark = true
 )
+
+/** Accent colours of one theme: light accent, on it, container, on it; then the same for dark. */
+private class Tones(
+    val la: Long, val lon: Long, val lh: Long, val loh: Long,
+    val da: Long, val don: Long, val dh: Long, val doh: Long
+)
+
+private val THEMES = mapOf(
+    "olive" to Tones(0xFF4C662B, 0xFFFFFFFF, 0xFFDCE7C8, 0xFF1A2410, 0xFFB1D18A, 0xFF1F3701, 0xFF354E16, 0xFFCDEDA3),
+    "ocean" to Tones(0xFF2E5F8A, 0xFFFFFFFF, 0xFFD1E4FF, 0xFF001D36, 0xFF9ECAFF, 0xFF003258, 0xFF0F4A73, 0xFFD1E4FF),
+    "terracotta" to Tones(0xFF9A4521, 0xFFFFFFFF, 0xFFFFDBCD, 0xFF360F00, 0xFFFFB59A, 0xFF5A1C00, 0xFF7A2E0B, 0xFFFFDBCD),
+    "plum" to Tones(0xFF6E4A8E, 0xFFFFFFFF, 0xFFF1DBFF, 0xFF280B44, 0xFFDDB8FF, 0xFF3F1F5A, 0xFF573873, 0xFFF1DBFF),
+    "graphite" to Tones(0xFF4A5560, 0xFFFFFFFF, 0xFFDDE3EA, 0xFF141C24, 0xFFBCC7D3, 0xFF26313B, 0xFF3D4853, 0xFFD9E3EE)
+)
+
+val COLOR_THEMES = listOf(
+    "wallpaper" to "Match my wallpaper", "olive" to "Olive", "ocean" to "Ocean",
+    "terracotta" to "Terracotta", "plum" to "Plum", "graphite" to "Graphite"
+)
+
+/** Swatch colour shown in Settings for each theme. */
+fun themeSwatch(key: String): Color = THEMES[key]?.let { Color(it.la) } ?: Color(0xFF7E7667)
+
+private fun themed(key: String, dark: Boolean): Palette {
+    val t = THEMES[key] ?: THEMES.getValue("olive")
+    val base = if (dark) DarkPalette else LightPalette
+    return base.copy(
+        accent = Color(if (dark) t.da else t.la), onAccent = Color(if (dark) t.don else t.lon),
+        hero = Color(if (dark) t.dh else t.lh), onHero = Color(if (dark) t.doh else t.loh),
+        inverseAccent = Color(if (dark) t.la else t.da),
+        bright = Color(t.da), onBright = Color(t.don)
+    )
+}
+
+/** Android 12+: colours taken from the wallpaper. */
+private fun fromScheme(c: androidx.compose.material3.ColorScheme, d: androidx.compose.material3.ColorScheme, dark: Boolean): Palette {
+    val base = if (dark) DarkPalette else LightPalette
+    return base.copy(
+        bg = c.surface, surface = c.surfaceContainer, surface2 = c.surfaceContainerHigh, line = c.outlineVariant,
+        text = c.onSurface, soft = c.onSurfaceVariant, muted = c.onSurfaceVariant,
+        accent = c.primary, onAccent = c.onPrimary, hero = c.primaryContainer, onHero = c.onPrimaryContainer,
+        fade = c.surface.copy(alpha = 0.6f), inverseAccent = c.inversePrimary, outline = c.outline,
+        bright = d.primary, onBright = d.onPrimary
+    )
+}
 
 object K {
     var p: Palette by mutableStateOf(LightPalette)
@@ -64,13 +115,21 @@ object K {
     val Fade get() = p.fade
     val InverseAccent get() = p.inverseAccent
     val Outline get() = p.outline
+    val Keep get() = p.keep
+    val OnKeep get() = p.onKeep
+    val Bright get() = p.bright
+    val OnBright get() = p.onBright
 }
 
-/** mode: "system", "light" or "dark" */
+/** mode: "system", "light" or "dark"; theme: a key of [COLOR_THEMES]. */
 @Composable
-fun KeeperTheme(mode: String, content: @Composable () -> Unit) {
+fun KeeperTheme(mode: String, theme: String = "olive", content: @Composable () -> Unit) {
     val dark = when (mode) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
-    val pal = if (dark) DarkPalette else LightPalette
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pal = if (theme == "wallpaper" && android.os.Build.VERSION.SDK_INT >= 31) {
+        val c = if (dark) androidx.compose.material3.dynamicDarkColorScheme(ctx) else androidx.compose.material3.dynamicLightColorScheme(ctx)
+        fromScheme(c, androidx.compose.material3.dynamicDarkColorScheme(ctx), dark)
+    } else themed(if (theme == "wallpaper") "olive" else theme, dark)
     K.p = pal
     MaterialTheme(
         colorScheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(

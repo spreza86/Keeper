@@ -52,7 +52,8 @@ fun SetsScreen(state: UiState, vm: AppViewModel) {
             return@LazyColumn
         }
         if (lib.abandoned.isEmpty()) item { Note("Nothing to clean up. Nice.") }
-        items(lib.abandoned, key = { it.key }) { s -> SetCard(s, state, vm) }
+        else item { SortChips(state.setsSort) { vm.setSetsSort(it) } }
+        items(vm.sortedSets(lib.abandoned, state), key = { it.key }) { s -> SetCard(s, state, vm) }
         if (lib.waiting.isNotEmpty()) {
             item { Label("Waiting, no edits yet") }
             items(lib.waiting, key = { "w" + it.key }) { s ->
@@ -70,7 +71,10 @@ fun SetsScreen(state: UiState, vm: AppViewModel) {
 
 @Composable
 private fun SetCard(s: Session, state: UiState, vm: AppViewModel) {
-    val keep = s.decisions.count { vm.isKept(it, state.overrides) }
+    val open = s.scenes.filter { !vm.reviewed(it, state.decided) }
+    val openPhotos = open.sumOf { it.size }
+    val keep = open.sumOf { sc -> sc.decisions.count { vm.isKept(it, state.overrides) } }
+    val done = s.scenes.size - open.size
     Panel {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             s.photos.take(4).forEach { Thumb(it.id, Modifier.weight(1f).aspectRatio(1f).rounded()) }
@@ -79,8 +83,8 @@ private fun SetCard(s: Session, state: UiState, vm: AppViewModel) {
         Text(
             listOfNotNull(
                 s.place?.let { it.city },
-                Fmt.plural(s.photos.size, "photo"),
-                Fmt.gb(s.photos.sumOf { it.size }),
+                if (done > 0) "${Fmt.n(openPhotos)} of ${Fmt.plural(s.photos.size, "photo")} left" else Fmt.plural(s.photos.size, "photo"),
+                "${Fmt.gb(vm.toFree(s.scenes, state))} to free",
                 "${Fmt.n(keep)} worth keeping",
                 "${Fmt.daysAgo(s.end)} days old"
             ).joinToString(" · "),
@@ -102,11 +106,25 @@ fun SetDetailScreen(state: UiState, vm: AppViewModel, key: String) {
         }
         return
     }
-    val decisions = s.decisions
-    val kept = decisions.count { vm.isKept(it, state.overrides) }
-    val deleting = decisions.filter { !vm.isKept(it, state.overrides) }
-    val groups = s.scenes.filter { it.size > 1 }
-    val singles = s.scenes.filter { it.size == 1 }.flatMap { it.decisions }
+    // Scenes you already reviewed are hidden; the set leaves the list once all are reviewed.
+    val groups = s.scenes.filter { it.size > 1 && !vm.reviewed(it, state.decided) }
+    val singleScenes = s.scenes.filter { it.size == 1 && !vm.reviewed(it, state.decided) }
+    val singles = singleScenes.flatMap { it.decisions }
+    val singlesKey = "single:" + s.key
+    val visible = groups.flatMap { it.decisions } + singles
+    val hidden = s.scenes.size - groups.size - singleScenes.size
+    val kept = visible.count { vm.isKept(it, state.overrides) }
+    val deleting = visible.filter { !vm.isKept(it, state.overrides) }
+
+    // "Done" checks: once any scene is ticked, the bottom button only acts on ticked scenes.
+    val checkedGroups = groups.filter { it.key in state.checked }
+    val singlesChecked = singles.isNotEmpty() && singlesKey in state.checked
+    val checkedCount = checkedGroups.size + (if (singlesChecked) 1 else 0)
+    val totalBlocks = groups.size + (if (singles.isNotEmpty()) 1 else 0)
+    val anyChecked = checkedCount > 0
+    val target = if (anyChecked) checkedGroups.flatMap { it.decisions } + (if (singlesChecked) singles else emptyList()) else visible
+    val targetDel = target.count { !vm.isKept(it, state.overrides) }
+    val wholeSet = !anyChecked || checkedCount == totalBlocks
 
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -125,15 +143,20 @@ fun SetDetailScreen(state: UiState, vm: AppViewModel, key: String) {
                     Column(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(K.Hero).padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
-                        Text("Keeping ${Fmt.n(kept)} of ${Fmt.n(decisions.size)}", color = K.OnHero, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Keeping ${Fmt.n(kept)} of ${Fmt.n(visible.size)}", color = K.OnHero, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
                             "${Fmt.n(deleting.size)} to delete · frees ${Fmt.gb(deleting.sumOf { it.photo.size })} · ${Fmt.plural(groups.size, "scene")}",
                             color = K.OnHero, fontSize = 12.sp
                         )
+                        if (hidden > 0) Text("${Fmt.plural(hidden, "scene")} you already reviewed ${if (hidden == 1) "is" else "are"} hidden", color = K.OnHero, fontSize = 12.sp)
                     }
-                    Text("Tap any photo to switch between keep and delete.", color = K.Muted, fontSize = 12.sp)
+                    Text(
+                        "Tap any photo to switch between keep and delete. Tick Done on the scenes you reviewed to delete only those and come back for the rest later.",
+                        color = K.Muted, fontSize = 12.sp
+                    )
                 }
             }
+            if (visible.isEmpty()) item { Note("Every scene of this set is reviewed.") }
             itemsIndexed(groups, key = { _, sc -> sc.key }) { idx, sc ->
                 val keepIn = sc.decisions.count { vm.isKept(it, state.overrides) }
                 val anyDeleted = keepIn < sc.size
@@ -147,8 +170,10 @@ fun SetDetailScreen(state: UiState, vm: AppViewModel, key: String) {
                             val best = sc.decisions.firstOrNull { it.verdict != Verdict.DELETE } ?: sc.decisions.first()
                             vm.setMany(sc.decisions.associate { it.photo.id to (it === best) })
                         }
+                        vm.check(sc.key)
                     },
                     onCompare = sc.decisions.filter { it.verdict == Verdict.CHOOSE }.takeIf { it.size >= 2 }?.let { pair -> { vm.openViewer(pair, 0, compare = true) } },
+                    done = sc.key in state.checked, onDone = { vm.toggleChecked(sc.key) },
                     tiles = sc.decisions, state = state, vm = vm
                 )
             }
@@ -157,18 +182,25 @@ fun SetDetailScreen(state: UiState, vm: AppViewModel, key: String) {
                     title = "Single shots",
                     sub = "${singles.size} with no similar frames",
                     action = null, onAction = {},
+                    done = singlesChecked, onDone = { vm.toggleChecked(singlesKey) },
                     tiles = singles, state = state, vm = vm
                 )
             }
         }
-        Row(
+        if (visible.isNotEmpty()) Row(
             Modifier.fillMaxWidth().background(K.Surface).padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Secondary("Keep set", { vm.keepSession(s) })
+            val keptT = target.size - targetDel
             Primary(
-                if (deleting.isEmpty()) "Nothing to delete" else "Keep ${Fmt.n(kept)}, delete ${Fmt.n(deleting.size)}",
-                { vm.deleteFromSession(s) }, danger = true, weight = 1.6f, enabled = deleting.isNotEmpty()
+                when {
+                    anyChecked && targetDel == 0 -> "Done with ${Fmt.plural(checkedCount, "scene")}"
+                    anyChecked -> "Delete $targetDel from ${Fmt.plural(checkedCount, "checked scene")}"
+                    targetDel == 0 -> "Done, keep all"
+                    else -> "Keep ${Fmt.n(keptT)}, delete ${Fmt.n(targetDel)}"
+                },
+                { vm.finishScenes(target, wholeSet) }, danger = targetDel > 0, weight = 1.6f
             )
         }
     }
@@ -181,6 +213,8 @@ private fun SceneBlock(
     action: String?,
     onAction: () -> Unit,
     onCompare: (() -> Unit)? = null,
+    done: Boolean = false,
+    onDone: (() -> Unit)? = null,
     tiles: List<Decision>,
     state: UiState,
     vm: AppViewModel
@@ -199,6 +233,7 @@ private fun SceneBlock(
                     color = K.OnHero, fontSize = 13.sp, fontWeight = FontWeight.Medium
                 )
             }
+            if (onDone != null) Box(Modifier.padding(end = 6.dp)) { DoneCheck(done, onDone) }
             if (action != null) {
                 Text(
                     action,
@@ -229,7 +264,7 @@ fun DecisionTile(d: Decision, kept: Boolean, override: Boolean?, onLongClick: ((
         override == false && d.verdict != Verdict.DELETE -> "Removed by you"
         else -> d.reason
     }
-    val color = if (d.verdict == Verdict.CHOOSE && override == null) K.Blue else K.Accent
+    val color = if (d.verdict == Verdict.CHOOSE && override == null) K.Blue else K.Keep
     Box(
         Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).ring(kept, color)
     ) {
@@ -239,7 +274,7 @@ fun DecisionTile(d: Decision, kept: Boolean, override: Boolean?, onLongClick: ((
             Text(
                 if (d.verdict == Verdict.CHOOSE && override == null) "Choose" else "Keep",
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).clip(RoundedCornerShape(50)).background(color).padding(horizontal = 7.dp, vertical = 2.dp),
-                color = K.OnAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                color = K.OnKeep, fontSize = 11.sp, fontWeight = FontWeight.Bold
             )
         }
         Text(

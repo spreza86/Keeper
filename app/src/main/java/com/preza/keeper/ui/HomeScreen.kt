@@ -148,7 +148,7 @@ fun HomeScreen(state: UiState, vm: AppViewModel) {
                     Column(Modifier.weight(1f)) {
                         Text("Your edits", color = K.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         Text(
-                            listOf("${Fmt.n(lib.editsMatched)} matched", state.learned).filter { it.isNotBlank() }.joinToString(" · "),
+                            listOf("${Fmt.n(lib.editsMatched)} matched", state.learned, state.loosened.lines().firstOrNull().orEmpty()).filter { it.isNotBlank() }.joinToString(" · "),
                             color = K.Muted, fontSize = 12.sp
                         )
                     }
@@ -216,9 +216,9 @@ private fun Hero(state: UiState, vm: AppViewModel, lib: Library, bytes: Long, co
 private fun HeroButton(text: String, filled: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     val base = Modifier.height(48.dp).clip(shape)
-    val m = if (filled) base.background(Color(0xFFB1D18A)) else base.border(1.dp, Color(0x80FFFFFF), shape)
+    val m = if (filled) base.background(K.Bright) else base.border(1.dp, Color(0x80FFFFFF), shape)
     Box(m.clickable(onClick = onClick).padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = if (filled) Color(0xFF1F3701) else Color.White, fontSize = 15.sp, fontWeight = if (filled) FontWeight.Bold else FontWeight.Medium)
+        Text(text, color = if (filled) K.OnBright else Color.White, fontSize = 15.sp, fontWeight = if (filled) FontWeight.Bold else FontWeight.Medium)
     }
 }
 

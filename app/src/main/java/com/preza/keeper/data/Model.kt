@@ -53,8 +53,18 @@ class Place(
 
 enum class Verdict { KEEP, CHOOSE, DELETE }
 
-/** [why] is the plain-language trail of numbers and rules behind [reason], shown in the viewer. */
-class Decision(val photo: CamPhoto, val verdict: Verdict, val reason: String, val why: String = "")
+/**
+ * [why] is the plain-language trail of numbers and rules behind [reason], shown in the viewer.
+ * [flag] is the quality check that failed (Checks.BLURRY...), [eyesLow] says eyes may be closed: both feed learning.
+ */
+class Decision(
+    val photo: CamPhoto,
+    val verdict: Verdict,
+    val reason: String,
+    val why: String = "",
+    val flag: String? = null,
+    val eyesLow: Boolean = false
+)
 
 class Scene(val key: String, val decisions: List<Decision>) {
     val size: Int get() = decisions.size

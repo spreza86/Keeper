@@ -1,6 +1,8 @@
 package com.preza.keeper.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +58,30 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
                 }
             }
         }
+        item { Label("Colour") }
+        item {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(K.Surface).padding(4.dp)) {
+                COLOR_THEMES.forEach { (key, label) ->
+                    val on = state.colorTheme == key
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (on) K.Hero else K.Surface)
+                            .clickable { vm.setColorTheme(key) }.padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            Modifier.size(22.dp).clip(RoundedCornerShape(50))
+                                .background(if (key == "wallpaper") K.Surface2 else themeSwatch(key))
+                                .border(1.dp, K.Outline, RoundedCornerShape(50))
+                        )
+                        Text(label, color = if (on) K.OnHero else K.Text, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.weight(1f))
+                        if (on) Text("On", color = K.OnHero, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+        item { Note("Keep stays green and delete stays red in every theme." + if (android.os.Build.VERSION.SDK_INT < 31) " Match my wallpaper needs Android 12." else "") }
+
         item { Label("Folders") }
         item {
             Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
@@ -76,6 +102,20 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
 
         item { Label("Learning from your edits") }
         item { Note(state.learned.ifBlank { "Runs after the first scan." }) }
+
+        item { Label("Learning from your choices") }
+        item {
+            Note(
+                (state.loosened.ifBlank { "No check adjusted yet." }) + "\n\n" +
+                    "When you keep photos a check flagged (Blurry, Too bright, Flash not ready, eyes), after 10 answers where you kept most of them, " +
+                    "that check gets one step less strict. Tinder swipes count too. " +
+                    "Your choices in Sets and Bursts are saved: ${Fmt.plural(state.decided.size, "photo")} reviewed so far."
+            )
+        }
+        item {
+            Row { Secondary("Forget my choices", { vm.forgetChoices() }) }
+        }
+        item { Note("Clears your saved keep and delete choices and what Keeper learned from them. Reviewed scenes will be suggested again. Kept sets stay kept.") }
 
         item { Label("Where photos were taken, tried in order") }
         item {

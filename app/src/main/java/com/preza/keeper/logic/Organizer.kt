@@ -52,7 +52,12 @@ class Organizer(
         val weeks: Int,
         val kept: Set<String>,
         val doneBursts: Set<String>,
-        val tripNames: Map<String, String>
+        val tripNames: Map<String, String>,
+        /** Photos you already reviewed (kept or deleted): their scenes are not suggested again. */
+        val decided: Set<Long> = emptySet(),
+        /** How far each check was loosened by your corrections (Checks.ALL -> 0..3), with the reason. */
+        val loosen: Map<String, Int> = emptyMap(),
+        val loosenNotes: Map<String, String> = emptyMap()
     )
 
     private class P(val photo: CamPhoto, var t: Instant, val trueOffset: Int?)
@@ -193,7 +198,7 @@ class Organizer(
 
         val keyFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val sessions = raws.mapIndexed { si, r ->
-            val scenes = sessionScenes[si].map { sc -> Scene("sc-${sc.first().photo.id}", decide(sc, refs[si], w, ::isEditedFull, ::isEditedCoarse, splits[si].notes)) }
+            val scenes = sessionScenes[si].map { sc -> Scene("sc-${sc.first().photo.id}", decide(sc, refs[si], w, ::isEditedFull, ::isEditedCoarse, splits[si].notes, s)) }
             val main = mainPlace(r.ps.mapNotNull { allPlaces[it.photo.id] })
             val start = r.ps.first().t
             Session(
@@ -237,11 +242,13 @@ class Organizer(
         // 6. Abandoned sets, bursts
         val threshold = s.weeks * 7L
         // A lone photo is not a set: it stays visible in Browse but is never listed as an outing to clean.
-        val candidates = sessions.filter { !it.edited && it.key !in s.kept && it.photos.size >= 2 }
+        fun reviewed(sc: Scene) = sc.decisions.all { it.photo.id in s.decided }
+        // A set you finished reviewing scene by scene leaves the list on its own.
+        val candidates = sessions.filter { !it.edited && it.key !in s.kept && it.photos.size >= 2 && it.scenes.any { sc -> !reviewed(sc) } }
         val abandoned = candidates.filter { Duration.between(it.end, now).toDays() >= threshold }.sortedByDescending { it.start }
         val waiting = candidates.filter { Duration.between(it.end, now).toDays() < threshold }.sortedByDescending { it.start }
         val bursts = sessions.flatMap { se -> se.scenes.map { se to it } }
-            .filter { (_, sc) -> sc.size >= 2 && sc.key !in s.doneBursts && sc.decisions.any { it.verdict == Verdict.DELETE } }
+            .filter { (_, sc) -> sc.size >= 2 && sc.key !in s.doneBursts && !reviewed(sc) && sc.decisions.any { it.verdict == Verdict.DELETE } }
             .sortedByDescending { it.first.start }
 
         // 7. Browse groupings
@@ -293,45 +300,66 @@ class Organizer(
         w: FloatArray,
         editedFull: (CamPhoto) -> Boolean,
         editedCoarse: (CamPhoto) -> Boolean,
-        groupNotes: Map<Long, String>
+        groupNotes: Map<Long, String>,
+        s: Settings
     ): List<Decision> {
         val ps = scene.map { it.photo }
+        val lv = { k: String -> s.loosen[k] ?: 0 }
+        // "Eyes closed" only lowers the ranking (it is never a reason to delete): eye detection misreads
+        // narrower eyes and people looking down. Your corrections can lower its weight further.
+        val wr = w.copyOf().also { it[1] *= Checks.eyesFactor(lv(Checks.EYES)) }
         fun rel(p: CamPhoto) = p.f.subjectSharp / ref
-        fun score(p: CamPhoto) = Learner.score(w, Learner.x(rel(p), p.f)) - (if (p.f.faceCut) 0.15f else 0f)
+        fun score(p: CamPhoto) = Learner.score(wr, Learner.x(rel(p), p.f)) - (if (p.f.faceCut) 0.15f else 0f)
+        fun eyesLow(p: CamPhoto) = p.f.faces > 0 && p.f.eyesOpen in 0f..0.25f
 
+        val blurF = Checks.blurFactor(lv(Checks.BLURRY))
+        val blurLimit = 0.45f * blurF
+        val blurSlowLimit = 0.65f * blurF
+        val brightLimit = Checks.brightLimit(lv(Checks.BRIGHT))
+        val flashRatio = Checks.flashRatio(lv(Checks.FLASH))
         val firedMean = ps.filter { it.flashFired == true }.map { it.f.mean }.average().toFloat()
         fun flag(p: CamPhoto): String? = when {
-            p.flashFired == false && ps.any { it.flashFired == true } && p.f.mean < 0.6f * firedMean -> "Flash not ready"
-            p.f.faces > 0 && p.f.eyesOpen in 0f..0.25f -> "Eyes closed"
-            rel(p) < 0.45f || ((p.exposure ?: 0.0) > 1.0 / 30 && rel(p) < 0.65f) -> "Blurry"
-            p.f.blown > 0.25f -> "Too bright"
+            p.flashFired == false && ps.any { it.flashFired == true } && p.f.mean < flashRatio * firedMean -> Checks.FLASH
+            rel(p) < blurLimit || ((p.exposure ?: 0.0) > 1.0 / 30 && rel(p) < blurSlowLimit) -> Checks.BLURRY
+            p.f.blown > brightLimit -> Checks.BRIGHT
             else -> null
         }
+        fun loosened(k: String): String? = if (lv(k) > 0) "This check was loosened: ${Checks.limitText(k, lv(k))}" +
+            (s.loosenNotes[k]?.takeIf { it.isNotBlank() }?.let { ", because $it." } ?: ".") else null
 
         /** The numbers behind each photo, in plain words, for the "Why?" panel. */
         fun facts(p: CamPhoto): List<String> {
             val l = ArrayList<String>()
             groupNotes[p.id]?.let { l += it }
             val slow = (p.exposure ?: 0.0) > 1.0 / 30
-            val limit = if (slow) 65 else 45
+            val limit = ((if (slow) blurSlowLimit else blurLimit) * 100).toInt()
             val on = if (p.f.faces > 0 && p.f.faceSharp > 0f) "on the face" else "whole frame"
             l += "Sharpness ($on): ${pct(rel(p))} of this outing's sharp shots. Under $limit% counts as blurry" +
                 (if (slow) " (slow shutter ${shutter(p.exposure!!)})." else ".")
+            if (flag(p) == Checks.BLURRY) loosened(Checks.BLURRY)?.let { l += it }
             if (p.f.faces > 0) {
                 l += if (p.f.eyesOpen >= 0f)
-                    "Faces found: ${p.f.faces}. Lowest eyes-open score ${"%.2f".format(p.f.eyesOpen)}, under 0.25 counts as eyes closed."
+                    "Faces found: ${p.f.faces}. Lowest eyes-open score ${"%.2f".format(p.f.eyesOpen)}" +
+                        (if (eyesLow(p)) ", eyes may be closed. This only lowers the ranking, it is never a reason to delete." else ".")
                 else "Faces found: ${p.f.faces}. Eyes not readable."
+                if (eyesLow(p)) loosened(Checks.EYES)?.let { l += it }
             }
-            if (p.flashFired == false && ps.any { it.flashFired == true })
-                l += "Flash did not fire. Brightness ${p.f.mean.toInt()} vs ${firedMean.toInt()} with flash (under 60% = flash not ready)."
-            if (p.f.blown > 0.10f) l += "Blown highlights: ${pct(p.f.blown)} of the frame, over 25% counts as too bright."
+            if (p.flashFired == false && ps.any { it.flashFired == true }) {
+                l += "Flash did not fire. Brightness ${p.f.mean.toInt()} vs ${firedMean.toInt()} with flash (under ${(flashRatio * 100).toInt()}% = flash not ready)."
+                if (flag(p) == Checks.FLASH) loosened(Checks.FLASH)?.let { l += it }
+            }
+            if (p.f.blown > 0.10f) {
+                l += "Blown highlights: ${pct(p.f.blown)} of the frame, over ${(brightLimit * 100).toInt()}% counts as too bright."
+                if (flag(p) == Checks.BRIGHT) loosened(Checks.BRIGHT)?.let { l += it }
+            }
             return l
         }
 
+        val flags = ps.associate { it.id to flag(it) }
         val out = LinkedHashMap<Long, Decision>()
         val kept = ArrayList<CamPhoto>()
         fun put(p: CamPhoto, v: Verdict, reason: String, rule: String) {
-            out[p.id] = Decision(p, v, reason, (facts(p) + rule).joinToString("\n"))
+            out[p.id] = Decision(p, v, reason, (facts(p) + rule).joinToString("\n"), flags[p.id], eyesLow(p))
         }
 
         // Anything you edited stays.
@@ -342,7 +370,6 @@ class Organizer(
         }
         edited.forEach { put(it, Verdict.KEEP, "Edited in Lightroom", "Kept: it matches one of your Lightroom edits."); kept += it }
 
-        val flags = ps.associate { it.id to flag(it) }
         val cands = ps.filter { it.id !in out && flags[it.id] == null }.sortedByDescending { score(it) }
 
         if (kept.isEmpty() && cands.isNotEmpty()) {
