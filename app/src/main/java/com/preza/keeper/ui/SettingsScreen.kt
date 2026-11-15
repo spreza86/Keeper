@@ -108,14 +108,17 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
             Note(
                 (state.loosened.ifBlank { "No check adjusted yet." }) + "\n\n" +
                     "When you keep photos a check flagged (Blurry, Too bright, Flash not ready, eyes), after 10 answers where you kept most of them, " +
-                    "that check gets one step less strict. Tinder swipes count too. " +
+                    "that check gets one step less strict. In Tinder mode only deletes count: a keep there can just mean not now, and Skip counts for nothing. " +
                     "Your choices in Sets and Bursts are saved: ${Fmt.plural(state.decided.size, "photo")} reviewed so far."
             )
         }
         item {
-            Row { Secondary("Forget my choices", { vm.forgetChoices() }) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Secondary("Reset checks", { vm.resetChecks() })
+                Secondary("Forget my choices", { vm.forgetChoices() })
+            }
         }
-        item { Note("Clears your saved keep and delete choices and what Keeper learned from them. Reviewed scenes will be suggested again. Kept sets stay kept.") }
+        item { Note("Reset checks puts every check back to default and keeps your saved choices. Forget my choices also clears your saved keep and delete choices: reviewed scenes will be suggested again. Kept sets stay kept.") }
 
         item { Label("Where photos were taken, tried in order") }
         item {

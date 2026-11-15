@@ -86,6 +86,7 @@ data class UiState(
     val quickIndex: Int = 0,
     val quickDeleted: List<Long> = emptyList(),
     val quickKept: Int = 0,
+    val quickSkipped: Int = 0,
     val error: String? = null,
     val stats: com.preza.keeper.data.Stats.Snapshot? = null,
     val viewer: ViewerState? = null,
@@ -292,8 +293,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         prefs.weights = lib.weights
+        val old = _ui.value.library
         _ui.update {
             it.copy(
+                stack = remapSets(it.stack, old, lib),
                 library = lib, learned = Learner.describe(lib.weights, lib.learnedPairs), loosened = Checks.describe(checks),
                 hero = heroFor(lib, it.hero, it.trashed)
             )
@@ -313,6 +316,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val pick = pool.randomOrNull() ?: return null
         prefs.lastHero = pick.decision.photo.id
         return pick
+    }
+
+    /**
+     * A set is named after its first photo, so deleting that photo renames the set. An open set screen
+     * follows its photos to the new name instead of saying the set is gone.
+     */
+    private fun remapSets(stack: List<Screen>, old: Library?, lib: Library): List<Screen> = stack.map { sc ->
+        if (sc !is Screen.SetDetail || old == null || lib.sessions.any { it.key == sc.key }) sc
+        else {
+            val ids = old.sessions.firstOrNull { it.key == sc.key }?.photos?.map { it.id }?.toSet().orEmpty()
+            lib.sessions.firstOrNull { se -> se.photos.any { it.id in ids } }?.let { Screen.SetDetail(it.key) } ?: sc
+        }
     }
 
     private fun reorganize() {
@@ -372,6 +387,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         reorganize()
     }
 
+    /** Settings: undo what the checks learned, keep the saved choices. */
+    fun resetChecks() {
+        checks.values.forEach { it.level = 0; it.recent = ""; it.note = "" }
+        prefs.loosen = Checks.write(checks)
+        toast("Checks back to default")
+        reorganize()
+    }
+
     // ---------- sets: Done checks and partial delete ----------
 
     fun toggleChecked(key: String) = _ui.update { it.copy(checked = if (key in it.checked) it.checked - key else it.checked + key) }
@@ -410,7 +433,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         "newest" -> list.sortedByDescending { it.start }
         "oldest" -> list.sortedBy { it.start }
         "free" -> list.sortedByDescending { toFree(it.scenes, st) }
-        else -> list.sortedBy { shuffleKey(it.key) }
+        else -> list.sortedBy { shuffleKey(it.start.atOffset(it.offset).toLocalDate().toString()) }
     }
 
     fun sortedBursts(list: List<Pair<Session, Scene>>, st: UiState): List<Pair<Session, Scene>> = when (st.burstsSort) {
@@ -458,7 +481,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         for (card in skipped) { if (cards.size >= 20) break; cards += card }
         if (cards.isEmpty()) { toast("Nothing to swipe right now. Nice."); return }
         roundCounted.clear()
-        _ui.update { it.copy(quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, stack = listOf(Screen.Quick)) }
+        _ui.update { it.copy(quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, quickSkipped = 0, stack = listOf(Screen.Quick)) }
     }
 
     /** Photos already counted for learning in this Tinder round. */
@@ -468,8 +491,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val st = _ui.value
         val card = st.quick.getOrNull(st.quickIndex) ?: return
         val id = card.decision.photo.id
-        // Swipes are not saved as choices (photos can come back), but they do teach the checks.
-        if (roundCounted.add(id)) learnFrom(listOf(card.decision to keep))
+        // Swipes are not saved as choices (photos can come back). Only deletes teach the checks:
+        // a keep in Tinder mode often just means "not now", so it is not a vote to loosen a check.
+        if (!keep && roundCounted.add(id)) learnFrom(listOf(card.decision to false))
         _ui.update {
             it.copy(
                 overrides = it.overrides + (id to keep),
@@ -478,6 +502,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 quickKept = if (keep) it.quickKept + 1 else it.quickKept
             )
         }
+    }
+
+    /** Skip: no choice at all. The photo is not marked, nothing is learned, it can come back in a later round. */
+    fun quickSkip() {
+        _ui.update { it.copy(quickIndex = it.quickIndex + 1, quickSkipped = it.quickSkipped + 1) }
     }
 
     /** One Android trash prompt for the whole round. */

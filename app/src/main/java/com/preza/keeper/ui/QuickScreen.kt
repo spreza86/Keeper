@@ -59,7 +59,7 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
             Text("Tinder mode", color = K.Text, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
             Text(
                 "A quick round of 20 weak shots from your groups of similar photos. " +
-                    "Swipe left to delete, right to keep. Tap the photo to see it full screen.",
+                    "Swipe left to delete, right to keep, or Skip to leave it for another time. Tap the photo to see it full screen.",
                 color = K.Muted, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp)
             )
             Text(
@@ -74,7 +74,7 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
     if (i >= cards.size) {
         Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center) {
             Text("Round finished", color = K.Muted, fontSize = 14.sp)
-            Text("$deleted deleted · ${state.quickKept} kept", color = K.Accent, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
+            Text("$deleted deleted · ${state.quickKept} kept" + (if (state.quickSkipped > 0) " · ${state.quickSkipped} skipped" else ""), color = K.Accent, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
             Text("${Fmt.gb(freed)} to free", color = K.Text, fontSize = 16.sp, modifier = Modifier.padding(top = 6.dp))
             if (deleted > 0) Text(
                 "Android will ask once to move them to the trash. They can be restored for 30 days.",
@@ -162,11 +162,23 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
             if (others.size <= 3) Spacer(Modifier.weight(1f))
         }
 
-        Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             FilledIconButton(
                 onClick = { vm.quickDecide(false) }, modifier = Modifier.size(62.dp), shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = K.Danger, contentColor = K.OnDanger)
             ) { Icon(Icons.Filled.Close, contentDescription = "Delete this photo") }
+            // Skip: not now. Nothing is marked or learned, the photo can come back in a later round.
+            Text(
+                "Skip",
+                modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(K.Surface)
+                    .pointerInput(photo.id) { detectTapGestures(onTap = { vm.quickSkip() }) }
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                color = K.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold
+            )
             FilledIconButton(
                 onClick = { vm.quickDecide(true) }, modifier = Modifier.size(62.dp), shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = K.Keep, contentColor = K.OnKeep)

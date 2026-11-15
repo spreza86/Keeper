@@ -244,7 +244,7 @@ class Organizer(
         // A lone photo is not a set: it stays visible in Browse but is never listed as an outing to clean.
         fun reviewed(sc: Scene) = sc.decisions.all { it.photo.id in s.decided }
         // A set you finished reviewing scene by scene leaves the list on its own.
-        val candidates = sessions.filter { !it.edited && it.key !in s.kept && it.photos.size >= 2 && it.scenes.any { sc -> !reviewed(sc) } }
+        val candidates = sessions.filter { se -> se.photos.none { "s-${it.id}" in s.kept } }.filter { !it.edited && it.photos.size >= 2 && it.scenes.any { sc -> !reviewed(sc) } }
         val abandoned = candidates.filter { Duration.between(it.end, now).toDays() >= threshold }.sortedByDescending { it.start }
         val waiting = candidates.filter { Duration.between(it.end, now).toDays() < threshold }.sortedByDescending { it.start }
         val bursts = sessions.flatMap { se -> se.scenes.map { se to it } }

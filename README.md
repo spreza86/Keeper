@@ -11,6 +11,13 @@ Android app that suggests which photos to delete from a Sony RAW folder, and gro
 
 The first scan reads every RAW file once (a few minutes for ~9,000 photos). Later scans only look at new or changed photos.
 
+## What's new in 0.7.1
+- **Partial delete no longer loses the set.** A set is named after its first photo, so deleting that photo renamed it and the open screen said the set was gone (and with Random order it jumped to another spot in the list). The set screen now follows its photos and stays open with the scenes you have not reviewed yet. Random order now uses the set's day, so a set keeps its place.
+- **Skip in Tinder mode.** Between delete and keep. Skip marks nothing and teaches nothing; the photo can come back in a later round.
+- **Tinder keeps no longer loosen the checks.** A keep there often just means "not now", so only Tinder deletes count toward learning. Sets and Bursts choices still count both ways.
+- **Reset checks** in Settings puts every check back to default without forgetting your saved choices.
+- A kept set stays kept even if its first photo is deleted later from Bursts or Tinder mode.
+
 ## What's new in 0.7
 - **Delete part of a set.** Each scene (and the Single shots block) has a Done check. Once you tick any, the bottom button deletes only from the ticked scenes; the rest of the set waits for next time. "Keep all" and "Keep best" tick the scene too.
 - **Your choices are saved.** When you press the delete (or done) button in Sets or Bursts, your keep and delete choices are saved on the phone. Reviewed scenes are hidden next time, a set leaves the list once every scene is reviewed, and photos you kept show "Kept by you". Settings has "Forget my choices". Tinder swipes are still not saved.
