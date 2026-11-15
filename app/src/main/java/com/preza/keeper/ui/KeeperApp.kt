@@ -82,6 +82,7 @@ fun KeeperApp(vm: AppViewModel) {
                     is Screen.Group -> GroupScreen(s, vm)
                     Screen.Settings -> SettingsScreen(state, vm)
                     Screen.Quick -> QuickScreen(state, vm)
+                    Screen.Grade -> GradeScreen(state, vm)
                 }
             }
             state.toast?.let { msg ->

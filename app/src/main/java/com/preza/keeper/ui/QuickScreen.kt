@@ -55,11 +55,12 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
     if (cards.isEmpty()) {
         val lib = state.library
         val waiting = weakShotsWaiting(state)
+        val maybes = state.maybes.keys.count { id -> id !in state.trashed && lib?.photoById?.containsKey(id) == true }
         Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center) {
             Text("Tinder mode", color = K.Text, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
             Text(
                 "A quick round of 20 weak shots from your groups of similar photos. " +
-                    "Swipe left to delete, right to keep, or Skip to leave it for another time. Tap the photo to see it full screen.",
+                    "Swipe left to delete, right to keep, or tap Maybe if you're not sure. Tap the photo to see it full screen.",
                 color = K.Muted, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp)
             )
             Text(
@@ -67,6 +68,14 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
                 color = K.Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp)
             )
             Row(Modifier.padding(top = 20.dp)) { Primary("Start a round", { vm.startQuick() }, enabled = lib != null && waiting > 0) }
+
+            Text("Your maybes", color = K.Text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 32.dp))
+            Text(
+                if (maybes == 0) "Empty. Photos you mark Maybe wait here, out of normal rounds, until you decide them or 2 months pass."
+                else "${Fmt.plural(maybes, "photo")} waiting. Here it's only Keep or Delete. Maybes not decided within 2 months go back into normal rounds.",
+                color = K.Muted, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp)
+            )
+            if (maybes > 0) Row(Modifier.padding(top = 14.dp)) { Secondary("Play my maybes", { vm.startMaybes() }) }
         }
         return
     }
@@ -74,14 +83,19 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
     if (i >= cards.size) {
         Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center) {
             Text("Round finished", color = K.Muted, fontSize = 14.sp)
-            Text("$deleted deleted · ${state.quickKept} kept" + (if (state.quickSkipped > 0) " · ${state.quickSkipped} skipped" else ""), color = K.Accent, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
+            Text("$deleted deleted · ${state.quickKept} kept", color = K.Accent, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
             Text("${Fmt.gb(freed)} to free", color = K.Text, fontSize = 16.sp, modifier = Modifier.padding(top = 6.dp))
+            if (state.quickMaybe > 0) Text(
+                "${state.quickMaybe} added to your maybes",
+                color = K.Text, fontSize = 16.sp, modifier = Modifier.padding(top = 4.dp)
+            )
             if (deleted > 0) Text(
                 "Android will ask once to move them to the trash. They can be restored for 30 days.",
                 color = K.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)
             )
             Row(Modifier.padding(top = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Secondary("Another round", { vm.startQuick() })
+                if (state.quickMaybesRound) Secondary("Back", { vm.quickStop() })
+                else Secondary("Another round", { vm.startQuick() })
                 if (deleted > 0) Primary("Move $deleted to trash", { vm.quickTrash() }, danger = true, weight = 1.4f)
                 else Primary("Done", { vm.quickStop() })
             }
@@ -98,7 +112,7 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             IconButton(onClick = { vm.quickStop() }) { Icon(Icons.Filled.Close, contentDescription = "End round", tint = K.Text) }
             Column(Modifier.weight(1f)) {
-                Text("Quick clean", color = K.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (state.quickMaybesRound) "Your maybes" else "Quick clean", color = K.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Text("Card ${i + 1} of ${cards.size}", color = K.Muted, fontSize = 12.sp)
             }
             Chip("$deleted deleted · ${Fmt.gb(freed)}", K.Hero, K.OnHero)
@@ -133,6 +147,13 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
                 }
         ) {
             LargePhoto(photo, Modifier.fillMaxSize())
+            // Keeper's opinion, so a Keep is a conscious "you're wrong" (it teaches the check).
+            Text(
+                keeperSays(card.decision),
+                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp).clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x99000000)).padding(horizontal = 10.dp, vertical = 5.dp),
+                color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+            )
             if (offset < -60f) Stamp("DELETE", Color(0xFFFF5A4E), Modifier.align(Alignment.TopEnd))
             if (offset > 60f) Stamp("KEEP", Color(0xFF7BD88F), Modifier.align(Alignment.TopStart))
         }
@@ -171,11 +192,11 @@ fun QuickScreen(state: UiState, vm: AppViewModel) {
                 onClick = { vm.quickDecide(false) }, modifier = Modifier.size(62.dp), shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = K.Danger, contentColor = K.OnDanger)
             ) { Icon(Icons.Filled.Close, contentDescription = "Delete this photo") }
-            // Skip: not now. Nothing is marked or learned, the photo can come back in a later round.
-            Text(
-                "Skip",
+            // Maybe: not sure. Teaches nothing, goes to the Maybes pile. Not offered inside "Play my maybes".
+            if (!state.quickMaybesRound) Text(
+                "Maybe",
                 modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(K.Surface)
-                    .pointerInput(photo.id) { detectTapGestures(onTap = { vm.quickSkip() }) }
+                    .pointerInput(photo.id) { detectTapGestures(onTap = { vm.quickMaybe() }) }
                     .padding(horizontal = 22.dp, vertical = 14.dp),
                 color = K.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold
             )
@@ -194,4 +215,11 @@ private fun Stamp(text: String, color: Color, modifier: Modifier) {
         modifier = modifier.padding(18.dp).clip(RoundedCornerShape(8.dp)).background(Color(0x66000000)).padding(horizontal = 12.dp, vertical = 4.dp),
         color = color, fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp
     )
+}
+
+/** "Keeper: blurry", "Keeper: duplicate", or what it would keep. */
+private fun keeperSays(d: com.preza.keeper.data.Decision): String = when {
+    d.verdict == Verdict.DELETE -> "Keeper: " + (d.flag ?: "duplicate").lowercase()
+    d.verdict == Verdict.CHOOSE -> "Keeper: too close to call"
+    else -> "Keeper: keep (" + d.reason.lowercase() + ")"
 }

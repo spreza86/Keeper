@@ -11,6 +11,14 @@ Android app that suggests which photos to delete from a Sony RAW folder, and gro
 
 The first scan reads every RAW file once (a few minutes for ~9,000 photos). Later scans only look at new or changed photos.
 
+## What's new in 0.7.2
+- **Maybe replaces Skip in Tinder mode.** Three buttons: Delete, Maybe, Keep. Maybe teaches nothing and puts the photo in your Maybes pile, out of normal rounds. The end of a round says how many you added.
+- **Play my maybes.** On the Tinder tab, a round of only your maybes, with Keep or Delete only. Each decision takes the photo out of the pile. Maybes you don't decide within 2 months go back into normal rounds.
+- **Tinder Keep counts again and is remembered.** Since Maybe now means "not sure", a Keep teaches the check that flagged the photo, the photo shows "Kept by you" and it no longer comes back in rounds.
+- **Keeper's opinion on the Tinder card**, e.g. "Keeper: blurry", so you know when a Keep is telling Keeper it was wrong.
+- **Forget my choices is now the one global reset.** It clears saved choices from Tinder, Sets and Bursts, your maybes and your kept sets. It no longer resets the checks: Reset checks does that.
+- **Grade Keeper** (Settings). Answer Good or Bad on about 40 random photos without seeing Keeper's opinion, then see how often Keeper agreed with you, overall and per check, and tap the photos where it disagreed to see why. It deletes nothing and teaches nothing. Past scores are kept, so the next versions can be compared.
+
 ## What's new in 0.7.1
 - **Partial delete no longer loses the set.** A set is named after its first photo, so deleting that photo renamed it and the open screen said the set was gone (and with Random order it jumped to another spot in the list). The set screen now follows its photos and stays open with the scenes you have not reviewed yet. Random order now uses the set's day, so a set keeps its place.
 - **Skip in Tinder mode.** Between delete and keep. Skip marks nothing and teaches nothing; the photo can come back in a later round.

@@ -67,6 +67,22 @@ class Prefs(ctx: Context) {
         }.toMap()
         set(v) = sp.edit().putString("decided", v.entries.joinToString(",") { "${it.key}:${if (it.value) 1 else 0}" }).apply()
 
+    /**
+     * Tinder mode Maybes: photo id -> when it was put there (epoch ms). A maybe stays out of normal rounds
+     * until you decide it in "Play my maybes" or it expires (see MAYBE_DAYS).
+     */
+    var maybes: Map<Long, Long>
+        get() = sp.getString("maybes", "")!!.split(',').mapNotNull { e ->
+            val i = e.indexOf(':')
+            if (i <= 0) null else e.substring(0, i).toLongOrNull()?.let { id -> e.substring(i + 1).toLongOrNull()?.let { id to it } }
+        }.toMap()
+        set(v) = sp.edit().putString("maybes", v.entries.joinToString(",") { "${it.key}:${it.value}" }).apply()
+
+    /** Grade Keeper results, newest last: "epochMs|agreed|total|version". */
+    var grades: List<String>
+        get() = sp.getString("grades", "")!!.split(';').filter { it.isNotBlank() }
+        set(v) = sp.edit().putString("grades", v.takeLast(20).joinToString(";")).apply()
+
     /** What Keeper learned from your corrections: check name -> {level, recent "1010", note}. */
     var loosen: JSONObject
         get() = runCatching { JSONObject(sp.getString("loosen", "{}")!!) }.getOrDefault(JSONObject())

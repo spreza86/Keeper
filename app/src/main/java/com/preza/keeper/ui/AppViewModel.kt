@@ -51,6 +51,7 @@ sealed interface Screen {
     data class Group(val title: String, val subtitle: String, val ids: List<Long>, val tags: List<String>) : Screen
     data object Settings : Screen
     data object Quick : Screen
+    data object Grade : Screen
 }
 
 class QuickCard(val decision: Decision, val scene: Scene)
@@ -86,7 +87,18 @@ data class UiState(
     val quickIndex: Int = 0,
     val quickDeleted: List<Long> = emptyList(),
     val quickKept: Int = 0,
-    val quickSkipped: Int = 0,
+    /** Photos put in the Maybes pile during this round. */
+    val quickMaybe: Int = 0,
+    /** This round is "Play my maybes": only Keep or Delete, each decision leaves the pile. */
+    val quickMaybesRound: Boolean = false,
+    /** Maybes pile, photo id -> when added (expired ones already dropped). */
+    val maybes: Map<Long, Long> = emptyMap(),
+    /** Grade Keeper: the sample being graded, where you are, and your Good (true) / Bad (false) answers. */
+    val grade: List<Decision> = emptyList(),
+    val gradeIndex: Int = 0,
+    val gradeAnswers: Map<Long, Boolean> = emptyMap(),
+    /** Past Grade Keeper results, see Prefs.grades. */
+    val grades: List<String> = emptyList(),
     val error: String? = null,
     val stats: com.preza.keeper.data.Stats.Snapshot? = null,
     val viewer: ViewerState? = null,
@@ -122,7 +134,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             UiState(
                 stats = stats.snapshot(), camFolder = prefs.cameraFolder, editsFolder = prefs.editsFolder, gap = prefs.gapMinutes,
                 weeks = prefs.weeks, appearance = prefs.appearance, colorTheme = prefs.colorTheme,
-                setsSort = prefs.setsSort, burstsSort = prefs.burstsSort, decided = d, overrides = d
+                setsSort = prefs.setsSort, burstsSort = prefs.burstsSort, decided = d, overrides = d,
+                maybes = activeMaybes(prefs), grades = prefs.grades
             )
         }
     )
@@ -377,13 +390,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (changed) toast("Keeper adjusted a check from your choices. See Settings.")
     }
 
-    /** Settings: start over. Saved choices and what was learned from them are cleared. */
+    /**
+     * Settings: the one global reset. Clears every remembered choice from Tinder, Sets and Bursts, the Maybes pile
+     * and kept sets, so the whole library can be gone through again. What the checks learned is NOT reset
+     * (that is "Reset checks").
+     */
     fun forgetChoices() {
         prefs.decided = emptyMap()
-        checks.values.forEach { it.level = 0; it.recent = ""; it.note = "" }
-        prefs.loosen = Checks.write(checks)
-        _ui.update { it.copy(decided = emptyMap(), overrides = emptyMap(), checked = emptySet()) }
-        toast("Choices forgotten")
+        prefs.maybes = emptyMap()
+        prefs.keptSessions = emptySet()
+        prefs.doneBursts = emptySet()
+        lastAction = null
+        _ui.update { it.copy(decided = emptyMap(), overrides = emptyMap(), checked = emptySet(), maybes = emptyMap(), burstKey = null, burstIdx = 0) }
+        toast("Choices forgotten. Everything can be suggested again.")
         reorganize()
     }
 
@@ -454,19 +473,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setColorTheme(v: String) { prefs.colorTheme = v; _ui.update { it.copy(colorTheme = v) } }
 
-    // ---------- quick clean ----------
+    // ---------- quick clean (Tinder mode) ----------
 
     /**
      * Up to 20 weak frames from groups of similar shots, in a new random order every round, at most 3 per outing
      * so a round mixes outings. [first] (the Home hero photo) opens the round when given.
+     * Photos you already decided and photos in the Maybes pile are left out.
      */
     fun startQuick(first: HeroPick? = null) {
         val st = _ui.value
         val lib = st.library ?: return
+        val maybes = refreshMaybes()
         val pool = lib.sessions.flatMap { s ->
             s.scenes.filter { it.size >= 2 }.flatMap { sc ->
-                sc.decisions.filter { it.verdict == Verdict.DELETE && it.photo.id !in st.trashed && st.overrides[it.photo.id] == null }
-                    .map { s.key to QuickCard(it, sc) }
+                sc.decisions.filter {
+                    it.verdict == Verdict.DELETE && it.photo.id !in st.trashed && st.overrides[it.photo.id] == null && it.photo.id !in maybes
+                }.map { s.key to QuickCard(it, sc) }
             }
         }.filter { it.second.decision.photo.id != first?.decision?.photo?.id }.shuffled()
         val cards = ArrayList<QuickCard>()
@@ -480,20 +502,50 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         for (card in skipped) { if (cards.size >= 20) break; cards += card }
         if (cards.isEmpty()) { toast("Nothing to swipe right now. Nice."); return }
+        beginRound(cards, maybesRound = false)
+    }
+
+    /** "Play my maybes": the photos in the Maybes pile, in random order, Keep or Delete only. */
+    fun startMaybes() {
+        val st = _ui.value
+        val lib = st.library ?: return
+        val maybes = refreshMaybes()
+        val cards = lib.sessions.flatMap { s ->
+            s.scenes.flatMap { sc -> sc.decisions.filter { it.photo.id in maybes && it.photo.id !in st.trashed }.map { QuickCard(it, sc) } }
+        }.shuffled().take(20)
+        if (cards.isEmpty()) { toast("Your maybes pile is empty."); return }
+        beginRound(cards, maybesRound = true)
+    }
+
+    private fun beginRound(cards: List<QuickCard>, maybesRound: Boolean) {
         roundCounted.clear()
-        _ui.update { it.copy(quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, quickSkipped = 0, stack = listOf(Screen.Quick)) }
+        _ui.update {
+            it.copy(
+                quick = cards, quickIndex = 0, quickDeleted = emptyList(), quickKept = 0, quickMaybe = 0,
+                quickMaybesRound = maybesRound, stack = listOf(Screen.Quick)
+            )
+        }
     }
 
     /** Photos already counted for learning in this Tinder round. */
     private val roundCounted = HashSet<Long>()
 
+    /**
+     * Keep or Delete. Both teach the check that flagged the photo (only photos Keeper suggested deleting count).
+     * A keep is remembered as your choice ("Kept by you") and the photo stops coming back.
+     * A delete waits for the trash prompt at the end of the round.
+     */
     fun quickDecide(keep: Boolean) {
         val st = _ui.value
         val card = st.quick.getOrNull(st.quickIndex) ?: return
         val id = card.decision.photo.id
-        // Swipes are not saved as choices (photos can come back). Only deletes teach the checks:
-        // a keep in Tinder mode often just means "not now", so it is not a vote to loosen a check.
-        if (!keep && roundCounted.add(id)) learnFrom(listOf(card.decision to false))
+        if (roundCounted.add(id)) learnFrom(listOf(card.decision to keep))
+        if (keep) {
+            val all = prefs.decided + (id to true)
+            prefs.decided = all
+            _ui.update { it.copy(decided = all) }
+        }
+        if (id in prefs.maybes) setMaybes(prefs.maybes - id)
         _ui.update {
             it.copy(
                 overrides = it.overrides + (id to keep),
@@ -504,21 +556,93 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Skip: no choice at all. The photo is not marked, nothing is learned, it can come back in a later round. */
-    fun quickSkip() {
-        _ui.update { it.copy(quickIndex = it.quickIndex + 1, quickSkipped = it.quickSkipped + 1) }
+    /** Maybe: not sure yet. Teaches nothing, goes to the Maybes pile and leaves normal rounds for up to 2 months. */
+    fun quickMaybe() {
+        val st = _ui.value
+        if (st.quickMaybesRound) return
+        val card = st.quick.getOrNull(st.quickIndex) ?: return
+        setMaybes(prefs.maybes + (card.decision.photo.id to System.currentTimeMillis()))
+        _ui.update { it.copy(quickIndex = it.quickIndex + 1, quickMaybe = it.quickMaybe + 1) }
+    }
+
+    private fun setMaybes(m: Map<Long, Long>) {
+        prefs.maybes = m
+        _ui.update { it.copy(maybes = m) }
+    }
+
+    /** Drops expired maybes (they go back into normal rounds) and returns the active pile. */
+    private fun refreshMaybes(): Map<Long, Long> {
+        val all = prefs.maybes
+        val active = activeMaybes(prefs)
+        if (active.size != all.size) prefs.maybes = active
+        _ui.update { it.copy(maybes = active) }
+        return active
     }
 
     /** One Android trash prompt for the whole round. */
     fun quickTrash() {
         val ids = _ui.value.quickDeleted
-        _ui.update { it.copy(quickDeleted = emptyList(), quick = emptyList(), quickIndex = 0, quickKept = 0) }
+        _ui.update { it.copy(quickDeleted = emptyList(), quick = emptyList(), quickIndex = 0, quickKept = 0, quickMaybe = 0) }
         requestTrash(ids, source = "Quick clean")
     }
 
     /** Leave the round. Decisions already made stay; nothing goes to the trash without the prompt. */
     fun quickStop() {
-        _ui.update { it.copy(quick = emptyList(), quickIndex = 0, quickKept = 0) }
+        _ui.update { it.copy(quick = emptyList(), quickIndex = 0, quickKept = 0, quickMaybe = 0) }
+    }
+
+    // ---------- Grade Keeper ----------
+
+    /**
+     * A random sample of up to 40 photos, about half that Keeper would delete and half it would keep,
+     * shown without Keeper's opinion. Grading deletes nothing and teaches nothing: it only measures.
+     */
+    fun startGrade() {
+        val st = _ui.value
+        val lib = st.library ?: run { toast("Wait for the scan to finish."); return }
+        val all = lib.sessions.flatMap { it.decisions }.filter { it.photo.id !in st.trashed }
+        val del = all.filter { it.verdict == Verdict.DELETE }.shuffled()
+        val keep = all.filter { it.verdict != Verdict.DELETE }.shuffled()
+        val nDel = minOf(del.size, maxOf(20, 40 - keep.size))
+        val sample = (del.take(nDel) + keep.take(40 - nDel)).shuffled()
+        if (sample.size < 5) { toast("Not enough photos to grade yet."); return }
+        _ui.update { it.copy(grade = sample, gradeIndex = 0, gradeAnswers = emptyMap(), stack = it.stack + Screen.Grade) }
+    }
+
+    fun gradeAnswer(good: Boolean) {
+        val st = _ui.value
+        val d = st.grade.getOrNull(st.gradeIndex) ?: return
+        val answers = st.gradeAnswers + (d.photo.id to good)
+        _ui.update { it.copy(gradeAnswers = answers, gradeIndex = it.gradeIndex + 1) }
+        if (st.gradeIndex + 1 >= st.grade.size) saveGrade(st.grade, answers)
+    }
+
+    /** Back one photo, to change an answer. */
+    fun gradeBack() {
+        val st = _ui.value
+        if (st.gradeIndex == 0 || st.gradeIndex >= st.grade.size) return
+        _ui.update { it.copy(gradeIndex = it.gradeIndex - 1) }
+    }
+
+    /** Ends early: the photos answered so far still count when there are at least 5. */
+    fun gradeFinishEarly() {
+        val st = _ui.value
+        val answered = st.grade.filter { it.photo.id in st.gradeAnswers }
+        if (answered.size < 5) { gradeClose(); return }
+        _ui.update { it.copy(grade = answered, gradeIndex = answered.size) }
+        saveGrade(answered, st.gradeAnswers)
+    }
+
+    fun gradeClose() {
+        _ui.update { it.copy(grade = emptyList(), gradeIndex = 0, gradeAnswers = emptyMap()) }
+        if (_ui.value.screen == Screen.Grade) back()
+    }
+
+    private fun saveGrade(sample: List<Decision>, answers: Map<Long, Boolean>) {
+        val r = GradeResult.of(sample, answers)
+        val all = prefs.grades + "${System.currentTimeMillis()}|${r.agreed}|${r.total}|${runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: ""}"
+        prefs.grades = all
+        _ui.update { it.copy(grades = prefs.grades) }
     }
 
     // ---------- viewer ----------
@@ -673,5 +797,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setAppearance(mode: String) {
         prefs.appearance = mode
         _ui.update { it.copy(appearance = mode) }
+    }
+}
+
+/** Maybes stay out of normal Tinder rounds for this long, then come back. */
+const val MAYBE_DAYS = 60
+
+fun activeMaybes(prefs: Prefs, now: Long = System.currentTimeMillis()): Map<Long, Long> =
+    prefs.maybes.filterValues { now - it < MAYBE_DAYS * 86_400_000L }
+
+/** How a Grade Keeper sample went: overall and per check. Keeper "agrees" when it would keep a Good photo or delete a Bad one. */
+class GradeResult(
+    val agreed: Int,
+    val total: Int,
+    /** check -> (right, total) over photos that check flagged */
+    val perCheck: List<Triple<String, Int, Int>>,
+    /** Photos Keeper would keep that you called Bad: (right, total) */
+    val keptRight: Pair<Int, Int>,
+    val disagreements: List<Decision>
+) {
+    companion object {
+        fun of(sample: List<Decision>, answers: Map<Long, Boolean>): GradeResult {
+            val graded = sample.filter { it.photo.id in answers }
+            fun agrees(d: Decision) = (d.verdict != Verdict.DELETE) == answers[d.photo.id]
+            val per = Checks.ALL.mapNotNull { c ->
+                val hit = graded.filter { d -> if (c == Checks.EYES) d.eyesLow else d.verdict == Verdict.DELETE && d.flag == c }
+                if (hit.isEmpty()) null
+                else Triple(c, hit.count { d -> if (c == Checks.EYES) answers[d.photo.id] == false else agrees(d) }, hit.size)
+            } + listOfNotNull(
+                graded.filter { it.verdict == Verdict.DELETE && it.flag == null }.takeIf { it.isNotEmpty() }
+                    ?.let { h -> Triple("Duplicate", h.count(::agrees), h.size) }
+            )
+            val kept = graded.filter { it.verdict != Verdict.DELETE }
+            return GradeResult(
+                graded.count(::agrees), graded.size, per, kept.count(::agrees) to kept.size,
+                graded.filterNot(::agrees)
+            )
+        }
     }
 }

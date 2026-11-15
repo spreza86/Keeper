@@ -108,8 +108,8 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
             Note(
                 (state.loosened.ifBlank { "No check adjusted yet." }) + "\n\n" +
                     "When you keep photos a check flagged (Blurry, Too bright, Flash not ready, eyes), after 10 answers where you kept most of them, " +
-                    "that check gets one step less strict. In Tinder mode only deletes count: a keep there can just mean not now, and Skip counts for nothing. " +
-                    "Your choices in Sets and Bursts are saved: ${Fmt.plural(state.decided.size, "photo")} reviewed so far."
+                    "that check gets one step less strict. In Tinder mode Keep and Delete both count, and Maybe counts for nothing. " +
+                    "Your choices in Tinder, Sets and Bursts are saved: ${Fmt.plural(state.decided.size, "photo")} reviewed so far."
             )
         }
         item {
@@ -118,7 +118,17 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
                 Secondary("Forget my choices", { vm.forgetChoices() })
             }
         }
-        item { Note("Reset checks puts every check back to default and keeps your saved choices. Forget my choices also clears your saved keep and delete choices: reviewed scenes will be suggested again. Kept sets stay kept.") }
+        item { Note("Reset checks puts every check back to default and keeps your saved choices. Forget my choices clears every saved choice from Tinder, Sets and Bursts, your maybes and your kept sets, so everything can be suggested again. It does not reset the checks.") }
+
+        item { Label("Grade Keeper") }
+        item {
+            Note(
+                "Answer Good or Bad on about 40 random photos without seeing Keeper's opinion, then see how often Keeper agreed with you, " +
+                    "overall and per check. It deletes nothing and teaches nothing, it only measures."
+            )
+        }
+        item { Row { Secondary("Grade Keeper", { vm.startGrade() }) } }
+        item { GradeHistory(state.grades) }
 
         item { Label("Where photos were taken, tried in order") }
         item {
