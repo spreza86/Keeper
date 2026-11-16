@@ -219,7 +219,7 @@ private fun Stamp(text: String, color: Color, modifier: Modifier) {
 
 /** "Keeper: blurry", "Keeper: duplicate", or what it would keep. */
 private fun keeperSays(d: com.preza.keeper.data.Decision): String = when {
-    d.verdict == Verdict.DELETE -> "Keeper: " + (d.flag ?: "duplicate").lowercase()
+    d.verdict == Verdict.DELETE -> "Keeper: " + d.reason.lowercase()
     d.verdict == Verdict.CHOOSE -> "Keeper: too close to call"
     else -> "Keeper: keep (" + d.reason.lowercase() + ")"
 }

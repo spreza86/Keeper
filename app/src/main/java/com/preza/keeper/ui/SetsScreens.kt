@@ -264,7 +264,12 @@ fun DecisionTile(d: Decision, kept: Boolean, override: Boolean?, onLongClick: ((
         override == false && d.verdict != Verdict.DELETE -> "Removed by you"
         else -> d.reason
     }
-    val color = if (d.verdict == Verdict.CHOOSE && override == null) K.Blue else K.Keep
+    val look = d.verdict == Verdict.DELETE && !d.sure && override == null
+    val color = when {
+        d.verdict == Verdict.CHOOSE && override == null -> K.Blue
+        look -> K.Bright
+        else -> K.Keep
+    }
     Box(
         Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).ring(kept, color)
     ) {
@@ -272,9 +277,13 @@ fun DecisionTile(d: Decision, kept: Boolean, override: Boolean?, onLongClick: ((
         if (!kept) Box(Modifier.fillMaxSize().background(K.Fade))
         if (kept) {
             Text(
-                if (d.verdict == Verdict.CHOOSE && override == null) "Choose" else "Keep",
+                when {
+                    d.verdict == Verdict.CHOOSE && override == null -> "Choose"
+                    look -> "Look"
+                    else -> "Keep"
+                },
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).clip(RoundedCornerShape(50)).background(color).padding(horizontal = 7.dp, vertical = 2.dp),
-                color = K.OnKeep, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                color = if (look) K.OnBright else K.OnKeep, fontSize = 11.sp, fontWeight = FontWeight.Bold
             )
         }
         Text(

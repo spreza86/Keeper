@@ -112,9 +112,10 @@ private fun GradeResults(state: UiState, vm: AppViewModel) {
         item {
             Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
                 val rows = r.perCheck.map { (c, ok, n) ->
-                    val name = if (c == com.preza.keeper.logic.Checks.EYES) "Eyes closed (you called it Bad)" else "$c (suggested for deletion)"
+                    val name = if (c == com.preza.keeper.logic.Checks.EYES) "Eyes closed (you called it Bad)" else "$c (Sure, delete)"
                     name to "$ok of $n right"
-                } + listOf("Photos Keeper would keep" to "${r.keptRight.first} of ${r.keptRight.second} right")
+                } + listOf("Photos Keeper would keep" to "${r.keptRight.first} of ${r.keptRight.second} right") +
+                    (if (r.look.second > 0) listOf("Worth a look (Keeper unsure)" to "you called ${r.look.first} of ${r.look.second} bad") else emptyList())
                 rows.forEachIndexed { idx, (name, v) ->
                     if (idx > 0) HorizontalDivider(color = K.Line)
                     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
@@ -126,7 +127,8 @@ private fun GradeResults(state: UiState, vm: AppViewModel) {
         }
         item {
             Note(
-                "Right means Keeper would delete a photo you called Bad, or keep one you called Good. " +
+                "Right means Keeper would delete (Sure) a photo you called Bad, or keep one you called Good. " +
+                    "Worth a look photos are Keeper saying it isn't sure, so they are left out of the score and shown apart. " +
                     "Eyes closed only lowers the ranking, so there right means you also called the photo Bad."
             )
         }

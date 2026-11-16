@@ -83,6 +83,16 @@ class Prefs(ctx: Context) {
         get() = sp.getString("grades", "")!!.split(';').filter { it.isNotBlank() }
         set(v) = sp.edit().putString("grades", v.takeLast(20).joinToString(";")).apply()
 
+    /** Engine version the saved learning belongs to (0 = before 0.7.3). */
+    var engine: Int
+        get() = sp.getInt("engine", 0)
+        set(v) = sp.edit().putInt("engine", v).apply()
+
+    /** Background scan only while the phone is charging. */
+    var scanOnlyCharging: Boolean
+        get() = sp.getBoolean("scanCharging", false)
+        set(v) = sp.edit().putBoolean("scanCharging", v).apply()
+
     /** What Keeper learned from your corrections: check name -> {level, recent "1010", note}. */
     var loosen: JSONObject
         get() = runCatching { JSONObject(sp.getString("loosen", "{}")!!) }.getOrDefault(JSONObject())

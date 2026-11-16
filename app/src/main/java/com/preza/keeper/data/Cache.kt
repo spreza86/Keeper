@@ -19,9 +19,13 @@ class Cache(ctx: Context) {
     val edits = HashMap<Long, JSONObject>()
     val phone = HashMap<Long, JSONObject>()
 
+    /** True once read from disk; the app and the background scan share one instance. */
+    @Volatile var loaded = false
+
     @Synchronized
     fun load() {
         cam.clear(); edits.clear(); phone.clear()
+        loaded = true
         if (!file.exists()) return
         try {
             val root = JSONObject(file.readText())
@@ -52,6 +56,9 @@ class Cache(ctx: Context) {
     }
 
     companion object {
+        @Volatile private var inst: Cache? = null
+        fun get(ctx: Context): Cache = inst ?: synchronized(this) { inst ?: Cache(ctx.applicationContext).also { inst = it } }
+
         fun camToJson(p: CamPhoto): JSONObject = JSONObject().apply {
             put("m", p.modified)
             p.dto?.let { put("dto", it) }
@@ -63,7 +70,11 @@ class Cache(ctx: Context) {
             p.flashFired?.let { put("flash", it) }
             p.lat?.let { put("lat", it) }
             p.lon?.let { put("lon", it) }
+            p.focal35?.let { put("f35", it) }
             val f = p.f
+            put("v", f.version)
+            put("g", JSONArray(listOf(f.subjSharp, f.bgSharp, f.bestSharp, f.streaks, f.detail, f.subjArea, f.subjSrc, f.focus, f.focusSharp, if (f.laugh) 1 else 0).map { it.toDouble() }))
+            put("map", Base64.encodeToString(f.map, Base64.NO_WRAP))
             put("f", JSONArray(listOf(f.sharp, f.faceSharp, f.crush, f.blown, f.mean, f.faces, f.eyesOpen, f.smile, if (f.faceCut) 1 else 0).map { it.toDouble() }))
             put("color", f.color)
             put("fp", Base64.encodeToString(f.fp, Base64.NO_WRAP))
@@ -71,6 +82,8 @@ class Cache(ctx: Context) {
 
         fun jsonToCam(j: JSONObject, item: MediaRepo.Item, uri: Uri): CamPhoto? = try {
             val a = j.getJSONArray("f")
+            val gv = j.optJSONArray("g")
+            fun gf(i: Int) = gv?.optDouble(i, 0.0)?.toFloat() ?: 0f
             val f = Features(
                 sharp = a.getDouble(0).toFloat(),
                 faceSharp = a.getDouble(1).toFloat(),
@@ -82,7 +95,12 @@ class Cache(ctx: Context) {
                 smile = a.getDouble(7).toFloat(),
                 faceCut = a.getDouble(8) > 0.5,
                 color = j.optString("color", "Muted"),
-                fp = Base64.decode(j.getString("fp"), Base64.NO_WRAP)
+                fp = Base64.decode(j.getString("fp"), Base64.NO_WRAP),
+                subjSharp = gf(0), bgSharp = gf(1), bestSharp = gf(2), streaks = gf(3),
+                detail = if (gv == null) 1f else gf(4), subjArea = gf(5), subjSrc = gf(6).toInt(),
+                focus = if (gv == null) Features.FOCUS_UNKNOWN else gf(7).toInt(), focusSharp = gf(8), laugh = gf(9) > 0.5f,
+                map = j.optString("map", "").let { if (it.isEmpty()) ByteArray(0) else Base64.decode(it, Base64.NO_WRAP) },
+                version = j.optInt("v", 1)
             )
             CamPhoto(
                 id = item.id, uri = uri, name = item.name, mime = item.mime, modified = item.modified,
@@ -94,7 +112,8 @@ class Cache(ctx: Context) {
                 flashFired = if (j.has("flash")) j.getBoolean("flash") else null,
                 lat = if (j.has("lat")) j.getDouble("lat") else null,
                 lon = if (j.has("lon")) j.getDouble("lon") else null,
-                f = f
+                f = f,
+                focal35 = if (j.has("f35")) j.getInt("f35") else null
             )
         } catch (e: Exception) {
             null

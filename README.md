@@ -11,6 +11,17 @@ Android app that suggests which photos to delete from a Sony RAW folder, and gro
 
 The first scan reads every RAW file once (a few minutes for ~9,000 photos). Later scans only look at new or changed photos.
 
+## What's new in 0.7.3
+- **New photo engine.** Sharpness is judged on the main subject: a face, an animal or object (found by a model built into the app, nothing is downloaded), or the camera's focus point read from the RAW. A soft background no longer drags a sharp subject down.
+- **Focus point from the RAW** (Sony MakerNote, "FocusLocation"). "Why?" says whether it was found and whether it sits on the subject. Written so other brands can be added later.
+- **Smarter about blur:** grain is smoothed out before measuring; areas whose edges all point one way (motion, light trails) are streaks and never count as sharp background; big dark or flat areas (silhouettes, sky) are ignored.
+- **The rules from your examples:** subject soft with a sharp background = missed focus (Sure when the camera aimed at the subject, Worth a look when it focused elsewhere and something crossed in front); nothing sharp = camera shake (Sure), or motion blur at a slow shutter (Worth a look); flash with a slow shutter and a sharp subject = intended light trails; silhouettes judged on their outline; a big laugh cancels closed eyes; eyes only on the main face.
+- **Sure vs Worth a look.** Worth a look photos show a yellow "Look" badge and stay kept unless you choose to delete them, so bulk deletes only take the Sure ones. Grade Keeper scores them apart.
+- **Sharpness map** in "Why?": the photo in 8 x 6 areas, green sharp, yellow softer, red soft, blue streaks, grey no edges. "Why?" also names the cause, e.g. "camera shake likely (1/25 s at 50 mm)".
+- **Every photo is analysed again** on the first start. Saved choices, maybes and kept sets stay; what the checks learned is reset (one-time note).
+- **Background scan.** Close the app and analysis carries on, resuming where it stopped. Settings: "Background scan only while charging".
+- Sharpness is compared with the same outing's sharp shots, faces with faces.
+
 ## What's new in 0.7.2
 - **Maybe replaces Skip in Tinder mode.** Three buttons: Delete, Maybe, Keep. Maybe teaches nothing and puts the photo in your Maybes pile, out of normal rounds. The end of a round says how many you added.
 - **Play my maybes.** On the Tinder tab, a round of only your maybes, with Keep or Delete only. Each decision takes the photo out of the pile. Maybes you don't decide within 2 months go back into normal rounds.

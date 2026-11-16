@@ -12,8 +12,8 @@ android {
         applicationId = "com.preza.keeper"
         minSdk = 30          // Android 11: needed for the system trash
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.7.2"
+        versionCode = 10
+        versionName = "0.7.3"
     }
 
     // Fixed signing key, kept in the repo: every build from any session signs the same way,
@@ -60,6 +60,11 @@ dependencies {
 
     // On-device face detection. The model ships inside the app, nothing is downloaded.
     implementation("com.google.mlkit:face-detection:16.1.7")
+    // On-device detection of the main subject (animals, objects). Bundled model, nothing is downloaded.
+    implementation("com.google.mlkit:object-detection:17.0.2")
+
+    // Background scan that continues after the app is closed and resumes where it stopped.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")

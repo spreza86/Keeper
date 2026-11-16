@@ -45,6 +45,99 @@ class Organizer(
         const val MERGE_SEC = 30.0
         /** ...when it looks at least this alike. */
         const val MERGE_SIM = 0.5f
+
+        /** Subject sharpness under this share of the outing's sharp shots counts as soft (before loosening). */
+        const val SOFT = 0.8f
+        /** Without 3 faces in the outing to compare with, a face is expected at this share of the general level. */
+        const val FACE_FACTOR = 0.85f
+        /** Under this share of the frame with real edges, the photo is a silhouette (or mostly sky / black). */
+        const val SILHOUETTE_DETAIL = 0.35f
+    }
+
+    /** The outing's sharp level, for faces and for everything else. */
+    class Ref(val all: Float, val face: Float) {
+        fun of(p: CamPhoto) = if (p.f.subjSrc == Features.SRC_FACE) face else all
+    }
+
+    /** Why a photo is flagged: which check (for learning), Sure or Worth a look, a short label and the reason. */
+    private class Cause(val check: String, val sure: Boolean, val label: String, val why: String)
+
+    /** Usual hand-held limit with stabilisation: about 2 / focal length, or 1/30 s when unknown. */
+    private fun shakeLimit(p: CamPhoto): Double = p.focal35?.takeIf { it > 0 }?.let { 2.0 / it } ?: (1.0 / 30)
+
+    /**
+     * The 0.7.3 rules, from the photos Saul sent (see keeper-status.md):
+     * subject soft + sharp background = missed focus (Sure if the camera aimed at the subject, Worth a look if it
+     * focused elsewhere: something crossed in front); nothing sharp = camera shake (Sure) or, with streaks at a
+     * slow shutter, motion blur (Worth a look); flash + slow shutter = intended light trails; silhouettes are
+     * judged on their outline only. Grain and streaks are handled by the analyzer.
+     */
+    private fun cause(
+        p: CamPhoto, rel: Float, ref: Ref, blurLimit: Float, brightLimit: Float,
+        flashRatio: Float, firedMean: Float, ps: List<CamPhoto>
+    ): Cause? {
+        val f = p.f
+        if (p.flashFired == false && ps.any { it.flashFired == true } && f.mean < flashRatio * firedMean)
+            return Cause(Checks.FLASH, true, Checks.FLASH, "")
+        val bright = if (f.blown > brightLimit) Cause(Checks.BRIGHT, true, Checks.BRIGHT, "") else null
+        if (f.version < Features.VERSION) return bright   // old measurements: no blur call until rescanned
+        val e = p.exposure ?: 0.0
+        val slow = e >= 1.0 / 30
+        val trail = p.flashFired == true && e >= 1.0 / 20
+        val silhouette = f.detail < SILHOUETTE_DETAIL && f.mean < 90f
+        val soft = rel < blurLimit
+        val relBest = f.bestSharp / ref.all
+        val bgSharp = f.bgSharp > 0f && f.bgSharp / ref.all >= 0.95f && f.bgSharp >= f.subjectSharp * 1.15f
+        val nothing = soft && (f.bestSharp <= 0f || relBest < blurLimit)
+        val lim = shakeLimit(p)
+        val at = p.focal35?.let { " at $it mm" } ?: ""
+        return when {
+            silhouette -> if (nothing && relBest < blurLimit * 0.8f)
+                Cause(Checks.BLURRY, false, "Soft silhouette", "Silhouette: even the outline is soft.") else bright
+            trail -> if (soft) Cause(
+                Checks.BLURRY, false, "Flash ghosting",
+                "Flash with a slow shutter: the light trails are intended, but the subject looks soft, maybe a double image."
+            ) else bright
+            soft && bgSharp -> when {
+                f.focus == Features.FOCUS_ON_SUBJECT -> Cause(
+                    Checks.BLURRY, true, "Missed focus",
+                    "Missed focus: the camera aimed at the subject, but the subject is soft while the background is sharp."
+                )
+                f.focus == Features.FOCUS_OFF_SUBJECT || (f.subjArea >= 0.25f && f.subjSrc != Features.SRC_FOCUS) -> Cause(
+                    Checks.BLURRY, false, "Subject in front",
+                    "A large subject is soft while the background is sharp" +
+                        (if (f.focus == Features.FOCUS_OFF_SUBJECT) " and that is where the camera focused" else "") +
+                        ": something may have crossed in front of you. It can also be intended framing."
+                )
+                else -> Cause(Checks.BLURRY, true, "Missed focus", "Missed focus: the subject is soft while the background is sharp.")
+            }
+            nothing -> if (f.streaks >= 0.5f && slow) Cause(
+                Checks.BLURRY, false, "Motion blur",
+                "Nothing sharp and the blur runs one way at ${shutter(e)}: a pan or motion that didn't freeze the subject. It can be intended."
+            ) else Cause(
+                Checks.BLURRY, true, if (e > lim) "Camera shake" else "Blurry",
+                if (e > lim) "Nothing sharp anywhere, even softness: camera shake likely (${shutter(e)}$at)."
+                else "Nothing sharp anywhere."
+            )
+            soft -> Cause(
+                Checks.BLURRY, false, "Subject soft",
+                "The subject is softer than this outing's sharp shots, with nothing clearly sharper in the frame."
+            )
+            else -> bright
+        }
+    }
+
+    /** What went right, in plain words, for photos that look unusual but are fine. */
+    private fun goodNote(p: CamPhoto, soft: Boolean): String? {
+        val f = p.f
+        val e = p.exposure ?: 0.0
+        if (soft || f.version < Features.VERSION) return null
+        return when {
+            p.flashFired == true && e >= 1.0 / 20 -> "Flash with a slow shutter: subject sharp, light trails intended."
+            f.detail < SILHOUETTE_DETAIL && f.mean < 90f -> "Silhouette: outline sharp."
+            f.streaks >= 0.4f && e >= 1.0 / 30 -> "Panned or moving scene: the subject is sharp, streaks are part of the picture."
+            else -> null
+        }
     }
 
     class Settings(
@@ -181,7 +274,13 @@ class Organizer(
 
         val splits = raws.map { r -> splitScenes(r.ps) }
         val sessionScenes = splits.map { it.scenes }
-        val refs = raws.map { r -> percentile(r.ps.map { it.photo.f.subjectSharp }, 0.75f).coerceAtLeast(0.01f) }
+        // Sharpness is judged against this outing's own sharp shots, faces against faces: skin has softer
+        // edges than bricks or bark, so a sharp face measures lower than a sharp wall.
+        val refs = raws.map { r ->
+            val all = percentile(r.ps.map { it.photo.f.subjectSharp }, 0.75f).coerceAtLeast(0.001f)
+            val faces = r.ps.filter { it.photo.f.subjSrc == Features.SRC_FACE }.map { it.photo.f.subjectSharp }
+            Ref(all, if (faces.size >= 3) percentile(faces, 0.75f).coerceAtLeast(0.001f) else all * FACE_FACTOR)
+        }
 
         val pairs = ArrayList<Pair<FloatArray, List<FloatArray>>>()
         sessionScenes.forEachIndexed { si, scenes ->
@@ -189,8 +288,8 @@ class Organizer(
                 if (sc.size < 2) continue
                 val picked = sc.filter { isEditedFull(it.photo) }.ifEmpty { sc.filter { isEditedCoarse(it.photo) } }
                 if (picked.size != 1) continue
-                val pos = Learner.x(picked[0].photo.f.subjectSharp / refs[si], picked[0].photo.f)
-                val negs = sc.filter { it !== picked[0] }.map { Learner.x(it.photo.f.subjectSharp / refs[si], it.photo.f) }
+                val pos = Learner.x(picked[0].photo.f.subjectSharp / refs[si].of(picked[0].photo), picked[0].photo.f)
+                val negs = sc.filter { it !== picked[0] }.map { Learner.x(it.photo.f.subjectSharp / refs[si].of(it.photo), it.photo.f) }
                 pairs += pos to negs
             }
         }
@@ -296,7 +395,7 @@ class Organizer(
 
     private fun decide(
         scene: List<P>,
-        ref: Float,
+        ref: Ref,
         w: FloatArray,
         editedFull: (CamPhoto) -> Boolean,
         editedCoarse: (CamPhoto) -> Boolean,
@@ -308,22 +407,18 @@ class Organizer(
         // "Eyes closed" only lowers the ranking (it is never a reason to delete): eye detection misreads
         // narrower eyes and people looking down. Your corrections can lower its weight further.
         val wr = w.copyOf().also { it[1] *= Checks.eyesFactor(lv(Checks.EYES)) }
-        fun rel(p: CamPhoto) = p.f.subjectSharp / ref
+        fun rel(p: CamPhoto) = p.f.subjectSharp / ref.of(p)
         fun score(p: CamPhoto) = Learner.score(wr, Learner.x(rel(p), p.f)) - (if (p.f.faceCut) 0.15f else 0f)
-        fun eyesLow(p: CamPhoto) = p.f.faces > 0 && p.f.eyesOpen in 0f..0.25f
+        // Only the main face counts, and a big laugh cancels closed eyes (the analyzer leaves eyes unknown then).
+        fun eyesLow(p: CamPhoto) = p.f.faces > 0 && !p.f.laugh && p.f.eyesOpen in 0f..0.25f
 
         val blurF = Checks.blurFactor(lv(Checks.BLURRY))
-        val blurLimit = 0.45f * blurF
-        val blurSlowLimit = 0.65f * blurF
+        val blurLimit = SOFT * blurF
         val brightLimit = Checks.brightLimit(lv(Checks.BRIGHT))
         val flashRatio = Checks.flashRatio(lv(Checks.FLASH))
         val firedMean = ps.filter { it.flashFired == true }.map { it.f.mean }.average().toFloat()
-        fun flag(p: CamPhoto): String? = when {
-            p.flashFired == false && ps.any { it.flashFired == true } && p.f.mean < flashRatio * firedMean -> Checks.FLASH
-            rel(p) < blurLimit || ((p.exposure ?: 0.0) > 1.0 / 30 && rel(p) < blurSlowLimit) -> Checks.BLURRY
-            p.f.blown > brightLimit -> Checks.BRIGHT
-            else -> null
-        }
+        val causes = ps.associate { it.id to cause(it, rel(it), ref, blurLimit, brightLimit, flashRatio, firedMean, ps) }
+        fun flag(p: CamPhoto): String? = causes[p.id]?.check
         fun loosened(k: String): String? = if (lv(k) > 0) "This check was loosened: ${Checks.limitText(k, lv(k))}" +
             (s.loosenNotes[k]?.takeIf { it.isNotBlank() }?.let { ", because $it." } ?: ".") else null
 
@@ -331,35 +426,57 @@ class Organizer(
         fun facts(p: CamPhoto): List<String> {
             val l = ArrayList<String>()
             groupNotes[p.id]?.let { l += it }
-            val slow = (p.exposure ?: 0.0) > 1.0 / 30
-            val limit = ((if (slow) blurSlowLimit else blurLimit) * 100).toInt()
-            val on = if (p.f.faces > 0 && p.f.faceSharp > 0f) "on the face" else "whole frame"
-            l += "Sharpness ($on): ${pct(rel(p))} of this outing's sharp shots. Under $limit% counts as blurry" +
-                (if (slow) " (slow shutter ${shutter(p.exposure!!)})." else ".")
+            val f = p.f
+            if (f.version < Features.VERSION) l += "Measured by the previous engine: rescan to use the new one."
+            l += "Sharpness ${Features.srcName(f.subjSrc)}: ${pct(rel(p))} of this outing's sharp shots" +
+                (if (f.subjSrc == Features.SRC_FACE) " (faces are compared with faces)" else "") +
+                ". Under ${(blurLimit * 100).toInt()}% counts as soft."
+            l += when (f.focus) {
+                Features.FOCUS_ON_SUBJECT -> "Focus point: found, on the subject."
+                Features.FOCUS_OFF_SUBJECT -> "Focus point: found, away from the subject" +
+                    (if (f.focusSharp > 0f) " (${pct(f.focusSharp / ref.all)} sharp there)." else ".")
+                Features.FOCUS_NO_SUBJECT -> "Focus point: found, used as the subject."
+                else -> "Focus point: not found in this file."
+            }
+            if (f.bgSharp > 0f) l += "Sharpest clean background: ${pct(f.bgSharp / ref.all)}."
+            if (f.streaks >= 0.3f) l += "Streaks (motion or light trails) in ${pct(f.streaks)} of the detailed areas; streaks never count as sharp background."
+            if (f.detail < SILHOUETTE_DETAIL) l += "Only ${pct(f.detail)} of the frame has real edges (silhouette, sky or black areas): only those edges are judged."
+            p.exposure?.let { e ->
+                val lim = shakeLimit(p)
+                l += "Shutter ${shutter(e)}" + (p.focal35?.let { " at $it mm" } ?: "") +
+                    (if (e > lim) ", slower than the usual hand-held limit (${shutter(lim)})." else ".")
+            }
+            if ((p.iso ?: 0) >= 3200) l += "ISO ${p.iso}: grain is smoothed out before measuring, it never counts as detail or as blur."
             if (flag(p) == Checks.BLURRY) loosened(Checks.BLURRY)?.let { l += it }
-            if (p.f.faces > 0) {
-                l += if (p.f.eyesOpen >= 0f)
-                    "Faces found: ${p.f.faces}. Lowest eyes-open score ${"%.2f".format(p.f.eyesOpen)}" +
+            if (f.faces > 0) {
+                l += when {
+                    f.laugh -> "Faces found: ${f.faces}. Big laugh on the main face: closed eyes don't count."
+                    f.eyesOpen >= 0f -> "Faces found: ${f.faces}. Main face eyes-open score ${"%.2f".format(f.eyesOpen)}" +
                         (if (eyesLow(p)) ", eyes may be closed. This only lowers the ranking, it is never a reason to delete." else ".")
-                else "Faces found: ${p.f.faces}. Eyes not readable."
+                    else -> "Faces found: ${f.faces}. Eyes not judged (face too small or not readable)."
+                }
                 if (eyesLow(p)) loosened(Checks.EYES)?.let { l += it }
             }
             if (p.flashFired == false && ps.any { it.flashFired == true }) {
-                l += "Flash did not fire. Brightness ${p.f.mean.toInt()} vs ${firedMean.toInt()} with flash (under ${(flashRatio * 100).toInt()}% = flash not ready)."
+                l += "Flash did not fire. Brightness ${f.mean.toInt()} vs ${firedMean.toInt()} with flash (under ${(flashRatio * 100).toInt()}% = flash not ready)."
                 if (flag(p) == Checks.FLASH) loosened(Checks.FLASH)?.let { l += it }
             }
-            if (p.f.blown > 0.10f) {
-                l += "Blown highlights: ${pct(p.f.blown)} of the frame, over ${(brightLimit * 100).toInt()}% counts as too bright."
+            if (f.blown > 0.10f) {
+                l += "Blown highlights: ${pct(f.blown)} of the frame, over ${(brightLimit * 100).toInt()}% counts as too bright."
                 if (flag(p) == Checks.BRIGHT) loosened(Checks.BRIGHT)?.let { l += it }
             }
+            causes[p.id]?.let { if (it.why.isNotEmpty()) l += it.why }
+            goodNote(p, rel(p) < blurLimit)?.let { l += it }
             return l
         }
 
         val flags = ps.associate { it.id to flag(it) }
+        val sureOf = ps.associate { it.id to (causes[it.id]?.sure ?: true) }
         val out = LinkedHashMap<Long, Decision>()
         val kept = ArrayList<CamPhoto>()
         fun put(p: CamPhoto, v: Verdict, reason: String, rule: String) {
-            out[p.id] = Decision(p, v, reason, (facts(p) + rule).joinToString("\n"), flags[p.id], eyesLow(p))
+            out[p.id] = Decision(p, v, reason, (facts(p) + rule).joinToString("\n"), flags[p.id], eyesLow(p),
+                sure = v != Verdict.DELETE || sureOf[p.id] != false)
         }
 
         // Anything you edited stays.
@@ -414,9 +531,14 @@ class Organizer(
         for (p in ps) {
             if (p.id in out) continue
             val f = flags[p.id]
-            put(p, Verdict.DELETE, f ?: "Duplicate",
-                if (f != null) "Suggested for deletion: \"$f\" (see the numbers above), and a better frame of this scene is kept."
-                else "Suggested for deletion: a better, similar frame of this scene is kept.")
+            val c = causes[p.id]
+            val label = c?.label ?: "Duplicate"
+            put(p, Verdict.DELETE, if (c != null && !c.sure) "Worth a look: ${label.lowercase()}" else label,
+                when {
+                    c != null && !c.sure -> "Worth a look, kept unless you choose to delete it: \"$label\" (see above)."
+                    c != null -> "Suggested for deletion: \"$label\" (see the numbers above)" + (if (ps.size > 1) ", and a better frame of this scene is kept." else ".")
+                    else -> "Suggested for deletion: a better, similar frame of this scene is kept."
+                })
         }
         return ps.map { out[it.id]!! }
     }

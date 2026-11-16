@@ -17,7 +17,7 @@ object Checks {
     const val MAX = 3
     private const val WINDOW = 10
 
-    /** Multiplies the "blurry" limits (45%, or 65% with a slow shutter). */
+    /** Multiplies the "soft" limit (80% of the outing's sharp shots, see Organizer.SOFT). */
     fun blurFactor(level: Int) = floatArrayOf(1f, 0.85f, 0.7f, 0.55f)[level.coerceIn(0, MAX)]
     /** Share of blown-out pixels above which a photo is "too bright". */
     fun brightLimit(level: Int) = floatArrayOf(0.25f, 0.33f, 0.41f, 0.5f)[level.coerceIn(0, MAX)]
@@ -61,7 +61,7 @@ object Checks {
     }
 
     fun limitText(check: String, level: Int): String = when (check) {
-        BLURRY -> "limit loosened to ${(45 * blurFactor(level)).toInt()}%"
+        BLURRY -> "limit loosened to ${(80 * blurFactor(level)).toInt()}%"
         BRIGHT -> "limit loosened to ${(100 * brightLimit(level)).toInt()}% blown highlights"
         FLASH -> "limit loosened to ${(100 * flashRatio(level)).toInt()}% of the flash brightness"
         EYES -> if (level >= MAX) "eyes no longer count in the ranking" else "eyes count ${(100 * eyesFactor(level)).toInt()}% as much in the ranking"

@@ -98,6 +98,21 @@ fun KeeperApp(vm: AppViewModel) {
         }
     }
     state.viewer?.let { PhotoViewer(it, state, vm) }
+    if (state.engineNote) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { vm.dismissEngineNote() },
+        containerColor = K.Surface,
+        title = { Text("New photo engine", color = K.Text) },
+        text = {
+            Text(
+                "Keeper now judges sharpness on the main subject (a face, an animal or object, or where the camera focused), " +
+                    "ignores grain, light trails and dark areas, and marks unsure calls as \"Worth a look\" instead of deleting them.\n\n" +
+                    "Every photo is analysed again. Your saved choices, maybes and kept sets stay. " +
+                    "What the checks learned was reset, because the new measurements mean something different.",
+                color = K.Soft, fontSize = 15.sp, lineHeight = 21.sp
+            )
+        },
+        confirmButton = { TextButton(onClick = { vm.dismissEngineNote() }) { Text("OK", color = K.Accent) } }
+    )
     }
 }
 

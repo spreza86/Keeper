@@ -21,6 +21,12 @@ class MainActivity : ComponentActivity() {
 
     private val vm: AppViewModel by viewModels()
 
+    override fun onStop() {
+        super.onStop()
+        // Photos still waiting to be analysed? The background scan carries on.
+        if (!isChangingConfigurations) vm.onBackground()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

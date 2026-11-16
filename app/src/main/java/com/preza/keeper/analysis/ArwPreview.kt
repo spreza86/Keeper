@@ -26,6 +26,21 @@ object ArwPreview {
         null
     }
 
+    /** The largest embedded preview and, when the camera saved one, the focus point. One file open for both. */
+    class Raw(val jpeg: ByteArray?, val focus: FocusPoint?)
+
+    fun open(cr: ContentResolver, uri: Uri, make: String?, model: String?): Raw = try {
+        cr.openFileDescriptor(uri, "r")?.use { pfd ->
+            FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                val jpeg = extract(ch)
+                val focus = Tiff.open(ch)?.let { FocusReaders.read(it, make, model) }
+                Raw(jpeg, focus)
+            }
+        } ?: Raw(null, null)
+    } catch (e: Exception) {
+        Raw(null, null)
+    }
+
     fun readAll(cr: ContentResolver, uri: Uri): ByteArray? = try {
         cr.openInputStream(uri)?.use { it.readBytes() }
     } catch (e: Exception) {

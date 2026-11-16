@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -160,6 +162,7 @@ fun PhotoViewer(v: ViewerState, state: UiState, vm: AppViewModel) {
                     ) {
                         Text("Why \"${cur.reason}\"", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         cur.why.lines().forEach { Text(it, color = Color(0xFFE0E0E0), fontSize = 12.sp, lineHeight = 16.sp) }
+                        SharpnessMap(cur.photo.f.map)
                     }
                 }
             }
@@ -225,5 +228,37 @@ private fun KeepToggle(d: Decision, kept: Boolean, small: Boolean, modifier: Mod
                 contentColor = if (kept) Color(0xFF1F3701) else Color.White
             )
         ) { Icon(Icons.Filled.Check, contentDescription = null); Text(" Keep", fontWeight = FontWeight.SemiBold) }
+    }
+}
+
+/**
+ * The sharpness map: the photo cut into 8 x 6 areas. Green = among the sharpest areas of this photo,
+ * yellow = a bit softer, red = soft, blue = streaks (motion or light trails), grey = no real edges.
+ */
+@Composable
+private fun SharpnessMap(map: ByteArray) {
+    val w = com.preza.keeper.analysis.Features.GRID_W
+    val h = com.preza.keeper.analysis.Features.GRID_H
+    if (map.size != w * h) return
+    val v = map.map { it.toInt() and 0xFF }
+    val best = v.filter { it < com.preza.keeper.analysis.Features.CELL_STREAK }.maxOrNull()?.coerceAtLeast(1) ?: 1
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
+        Text("Sharpness map", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.width(192.dp).clip(RoundedCornerShape(6.dp))) {
+            for (y in 0 until h) Row {
+                for (x in 0 until w) {
+                    val c = v[y * w + x]
+                    val col = when {
+                        c == com.preza.keeper.analysis.Features.CELL_FLAT -> Color(0xFF3A3A3A)
+                        c == com.preza.keeper.analysis.Features.CELL_STREAK -> Color(0xFF4F8DFF)
+                        c >= best * 0.85f -> Color(0xFF7BD88F)
+                        c >= best * 0.65f -> Color(0xFFF2C94C)
+                        else -> Color(0xFFFF6B5E)
+                    }
+                    Box(Modifier.weight(1f).height(18.dp).padding(1.dp).background(col))
+                }
+            }
+        }
+        Text("Green sharpest · yellow softer · red soft · blue streaks · grey no edges", color = Color(0xFFBDBDBD), fontSize = 11.sp)
     }
 }

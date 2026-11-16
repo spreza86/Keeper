@@ -23,7 +23,8 @@ class CamPhoto(
     val flashFired: Boolean?,
     val lat: Double?,
     val lon: Double?,
-    val f: Features
+    val f: Features,
+    val focal35: Int? = null      // EXIF focal length in 35 mm terms, for camera shake
 ) {
     val fullKey: String? get() = if (dto != null && subsec != null) "$dto|$subsec|$model" else null
     val coarseKey: String? get() = dto?.let { "$it|$model" }
@@ -63,7 +64,12 @@ class Decision(
     val reason: String,
     val why: String = "",
     val flag: String? = null,
-    val eyesLow: Boolean = false
+    val eyesLow: Boolean = false,
+    /**
+     * For DELETE: true = "Sure", false = "Worth a look". Worth a look photos stay kept by default,
+     * so a bulk delete only takes the Sure ones.
+     */
+    val sure: Boolean = true
 )
 
 class Scene(val key: String, val decisions: List<Decision>) {

@@ -6,7 +6,10 @@ import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.preza.keeper.analysis.Analyzer
+import com.preza.keeper.analysis.Features
+import com.preza.keeper.data.BackgroundScan
+import com.preza.keeper.data.ScanEngine
+import kotlinx.coroutines.sync.withLock
 import com.preza.keeper.analysis.ArwPreview
 import com.preza.keeper.data.Cache
 import com.preza.keeper.data.CamPhoto
@@ -114,7 +117,10 @@ data class UiState(
     val burstKey: String? = null,
     val burstIdx: Int = 0,
     /** What your corrections changed, one line per check. */
-    val loosened: String = ""
+    val loosened: String = "",
+    /** One-time note after the 0.7.3 engine upgrade. */
+    val engineNote: Boolean = false,
+    val scanOnlyCharging: Boolean = false
 ) {
     val screen: Screen get() = stack.last()
 }
@@ -124,9 +130,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx = app.applicationContext
     private val prefs = Prefs(ctx)
     private val repo = MediaRepo(ctx)
-    private val cache = Cache(ctx)
+    private val cache = Cache.get(ctx)
     private val geo = Geo(ctx)
-    private val analyzer = Analyzer()
     private val stats = com.preza.keeper.data.Stats(ctx)
 
     private val _ui = MutableStateFlow(
@@ -135,7 +140,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 stats = stats.snapshot(), camFolder = prefs.cameraFolder, editsFolder = prefs.editsFolder, gap = prefs.gapMinutes,
                 weeks = prefs.weeks, appearance = prefs.appearance, colorTheme = prefs.colorTheme,
                 setsSort = prefs.setsSort, burstsSort = prefs.burstsSort, decided = d, overrides = d,
-                maybes = activeMaybes(prefs), grades = prefs.grades
+                maybes = activeMaybes(prefs), grades = prefs.grades, scanOnlyCharging = prefs.scanOnlyCharging
             )
         }
     )
@@ -185,29 +190,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun scan(full: Boolean = false) {
         if (scanJob?.isActive == true) return
+        BackgroundScan.cancel(ctx)   // the app takes over while open
         scanJob = viewModelScope.launch {
             try {
                 _ui.update { it.copy(scanning = true, stage = "Reading folders", error = null) }
                 withContext(Dispatchers.IO) {
-                    if (full) { cache.clear(); Thumbs.clear(ctx) } else cache.load()
+                    if (full) ScanEngine.lock.withLock { cache.clear(); Thumbs.clear(ctx) }
+                    else if (!cache.loaded) cache.load()
                 }
+                engineUpgrade()
+                _ui.update { it.copy(stage = "Analyzing photos") }
                 val items = withContext(Dispatchers.IO) { repo.camera(prefs.cameraFolder) }
-                val todo = items.filter { cache.cam[it.id]?.optLong("m", -1L) != it.modified }
-                val done = AtomicInteger(items.size - todo.size)
-                _ui.update { it.copy(stage = "Analyzing photos", done = done.get(), total = items.size) }
-
-                val sem = Semaphore(3)
-                coroutineScope {
-                    for (item in todo) launch(Dispatchers.Default) {
-                        sem.withPermit {
-                            val p = runCatching { analyzeOne(item) }.getOrNull()
-                            if (p != null) synchronized(cache) { cache.cam[item.id] = Cache.camToJson(p) }
-                            val d = done.incrementAndGet()
-                            if (d % 8 == 0 || d == items.size) _ui.update { it.copy(done = d) }
-                            if (d % 400 == 0) withContext(Dispatchers.IO) { cache.save() }
-                        }
-                    }
-                }
+                ScanEngine.analyzeMissing(ctx, cache, prefs, onProgress = { d, t -> _ui.update { it.copy(done = d, total = t) } })
 
                 _ui.update { it.copy(stage = "Matching your edits") }
                 editKeys = withContext(Dispatchers.IO) { loadEdits() }
@@ -227,29 +221,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun analyzeOne(item: MediaRepo.Item): CamPhoto? {
-        val uri = repo.uri(item.id)
-        val exif = repo.exif(item.id)
-        val orientation = exif?.getAttributeInt(ExifInterface.TAG_ORIENTATION, 1) ?: 1
-        val isJpeg = item.mime.contains("jpeg") || item.name.endsWith(".jpg", ignoreCase = true)
-        val bytes = if (isJpeg) ArwPreview.readAll(ctx.contentResolver, uri) else ArwPreview.extractJpeg(ctx.contentResolver, uri)
-        val bmp = bytes?.let { ArwPreview.decodeSampled(it, 512, orientation) } ?: return null
-        val f = analyzer.analyze(bmp)
-        Thumbs.write(ctx, item.id, bmp)
-        val ll = exif?.latLong
-        return CamPhoto(
-            id = item.id, uri = uri, name = item.name, mime = item.mime, modified = item.modified,
-            size = item.size, takenFallback = item.taken,
-            dto = exif?.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)?.trim(),
-            subsec = exif?.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)?.trim(),
-            offsetExif = exif?.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.trim(),
-            model = exif?.getAttribute(ExifInterface.TAG_MODEL)?.trim(),
-            iso = exif?.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0)?.takeIf { it > 0 },
-            exposure = exif?.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0)?.takeIf { it > 0 },
-            flashFired = exif?.getAttributeInt(ExifInterface.TAG_FLASH, -1)?.takeIf { it >= 0 }?.let { (it and 1) == 1 },
-            lat = ll?.getOrNull(0), lon = ll?.getOrNull(1),
-            f = f
-        )
+    /**
+     * First start with the 0.7.3 engine: every photo is analysed again (choices are kept, they are saved by photo),
+     * and what the checks learned is reset because the new measurements mean something different. A one-time
+     * note explains it.
+     */
+    private fun engineUpgrade() {
+        if (prefs.engine >= Features.VERSION) return
+        if (prefs.engine > 0 || cache.cam.isNotEmpty()) {
+            checks.values.forEach { it.level = 0; it.recent = ""; it.note = "" }
+            prefs.loosen = Checks.write(checks)
+            _ui.update { it.copy(engineNote = true, loosened = "") }
+        }
+        prefs.engine = Features.VERSION
+    }
+
+    fun dismissEngineNote() = _ui.update { it.copy(engineNote = false) }
+
+    /** App going to the background: if photos are still waiting, the background scan carries on. */
+    fun onBackground() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!_ui.value.permission) return@launch
+            val left = if (_ui.value.scanning) 1 else runCatching { ScanEngine.remaining(ctx, cache, prefs) }.getOrDefault(0)
+            if (left > 0) BackgroundScan.schedule(ctx, prefs.scanOnlyCharging)
+        }
+    }
+
+    fun setScanOnlyCharging(v: Boolean) {
+        prefs.scanOnlyCharging = v
+        _ui.update { it.copy(scanOnlyCharging = v) }
     }
 
     /** Builds the set of "this photo was edited" keys from the edits folder. */
@@ -350,7 +350,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- keep / delete ----------
 
     fun isKept(d: Decision, overrides: Map<Long, Boolean> = _ui.value.overrides): Boolean =
-        overrides[d.photo.id] ?: (d.verdict != Verdict.DELETE)
+        overrides[d.photo.id] ?: (d.verdict != Verdict.DELETE || !d.sure)
 
     fun toggle(d: Decision) {
         val now = isKept(d)
@@ -806,32 +806,39 @@ const val MAYBE_DAYS = 60
 fun activeMaybes(prefs: Prefs, now: Long = System.currentTimeMillis()): Map<Long, Long> =
     prefs.maybes.filterValues { now - it < MAYBE_DAYS * 86_400_000L }
 
-/** How a Grade Keeper sample went: overall and per check. Keeper "agrees" when it would keep a Good photo or delete a Bad one. */
+/**
+ * How a Grade Keeper sample went. Keeper "agrees" when it would keep a photo you called Good, or delete
+ * ("Sure") one you called Bad. "Worth a look" photos are Keeper saying it isn't sure: they are counted apart.
+ */
 class GradeResult(
     val agreed: Int,
     val total: Int,
-    /** check -> (right, total) over photos that check flagged */
+    /** label -> (right, total): one row per reason Keeper gave for a Sure delete, plus eyes. */
     val perCheck: List<Triple<String, Int, Int>>,
-    /** Photos Keeper would keep that you called Bad: (right, total) */
+    /** Photos Keeper would keep: (right, total) */
     val keptRight: Pair<Int, Int>,
+    /** Worth a look photos: (you called Bad, total) */
+    val look: Pair<Int, Int>,
     val disagreements: List<Decision>
 ) {
     companion object {
+        fun isLook(d: Decision) = d.verdict == Verdict.DELETE && !d.sure
+
         fun of(sample: List<Decision>, answers: Map<Long, Boolean>): GradeResult {
             val graded = sample.filter { it.photo.id in answers }
+            val decided = graded.filterNot(::isLook)
             fun agrees(d: Decision) = (d.verdict != Verdict.DELETE) == answers[d.photo.id]
-            val per = Checks.ALL.mapNotNull { c ->
-                val hit = graded.filter { d -> if (c == Checks.EYES) d.eyesLow else d.verdict == Verdict.DELETE && d.flag == c }
-                if (hit.isEmpty()) null
-                else Triple(c, hit.count { d -> if (c == Checks.EYES) answers[d.photo.id] == false else agrees(d) }, hit.size)
-            } + listOfNotNull(
-                graded.filter { it.verdict == Verdict.DELETE && it.flag == null }.takeIf { it.isNotEmpty() }
-                    ?.let { h -> Triple("Duplicate", h.count(::agrees), h.size) }
-            )
-            val kept = graded.filter { it.verdict != Verdict.DELETE }
+            val sure = decided.filter { it.verdict == Verdict.DELETE }
+            val per = sure.groupBy { it.reason }.map { (label, ds) -> Triple(label, ds.count(::agrees), ds.size) }
+                .sortedByDescending { it.third } +
+                listOfNotNull(graded.filter { it.eyesLow }.takeIf { it.isNotEmpty() }
+                    ?.let { h -> Triple(Checks.EYES, h.count { answers[it.photo.id] == false }, h.size) })
+            val kept = decided.filter { it.verdict != Verdict.DELETE }
+            val looks = graded.filter(::isLook)
             return GradeResult(
-                graded.count(::agrees), graded.size, per, kept.count(::agrees) to kept.size,
-                graded.filterNot(::agrees)
+                decided.count(::agrees), decided.size, per, kept.count(::agrees) to kept.size,
+                looks.count { answers[it.photo.id] == false } to looks.size,
+                decided.filterNot(::agrees)
             )
         }
     }

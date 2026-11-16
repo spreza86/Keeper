@@ -148,6 +148,28 @@ fun SettingsScreen(state: UiState, vm: AppViewModel) {
             )
         }
 
+        item { Label("Scanning") }
+        item {
+            Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { vm.setScanOnlyCharging(!state.scanOnlyCharging) }.padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Background scan only while charging", color = K.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (state.scanOnlyCharging) "On: waits for the charger" else "Off: any time the battery isn't low", color = K.Muted, fontSize = 13.sp)
+                    }
+                    androidx.compose.material3.Switch(checked = state.scanOnlyCharging, onCheckedChange = { vm.setScanOnlyCharging(it) })
+                }
+            }
+        }
+        item {
+            Note(
+                "When you close Keeper with photos still to analyse, it carries on in the background and resumes where it stopped. " +
+                    "It analyses the largest preview inside each RAW, finds the main subject (a face, an animal or object, or the camera's focus point) " +
+                    "and judges sharpness there. Everything stays on this phone."
+            )
+        }
         item {
             Row(Modifier.padding(top = 8.dp)) {
                 Secondary(if (state.scanning) "Scanning..." else "Rescan everything", { if (!state.scanning) vm.rescan() })
